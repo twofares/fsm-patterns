@@ -6,16 +6,10 @@ import fsm.sample.logging.TransitionLog
 /**
  * PURPOSE: Classical finite-state machine encoded as ordinary Kotlin — no engine.
  *
- * Discipline demonstrated:
- * - Sealed/closed state and event hierarchies (finite, compile-time known set)
- * - Pure transition of the form State + Event → State
- * - Pure step of the form State + Event → StepResult(next, [LightEffect]s)
- * - Exhaustive `when` so missing handlers are rejected without an `else`
- * - Boundary assigns state and runs [interpretLight] (cross-cutting audit only)
- *
- * Domain vignette: a simple traffic light cycle. Flat (non-hierarchical) FSM
- * only — hierarchy is shown in the GoF/hierarchical package. Light has **no**
- * domain-only effects (contrast Connection [IncHeartbeat]).
+ * Pure [step] returns next state + [LightEffect] list mixing:
+ * - cross-cutting [LightEffect.Audit] (transition log)
+ * - domain [LightEffect.DriveLamp] (signal hardware intent)
+ * Boundary [handle] assigns state then [interpretLight] to dual sinks (log + [LightPort]).
  */
 
 /** Closed set of traffic-light modes. Sealed = no external subclasses. */
@@ -24,7 +18,6 @@ sealed class LightState {
     data object Green : LightState()
     data object Yellow : LightState()
 
-    /** Stable label for logging and tests. */
     fun label(): String = when (this) {
         Red -> "Red"
         Green -> "Green"
@@ -34,10 +27,7 @@ sealed class LightState {
 
 /** Closed set of inputs that may affect the light. */
 sealed class LightEvent {
-    /** Advance one step in the fixed cycle. */
     data object Tick : LightEvent()
-
-    /** Emergency: force red regardless of current color. */
     data object Emergency : LightEvent()
 
     fun label(): String = when (this) {
@@ -48,13 +38,7 @@ sealed class LightEvent {
 
 /**
  * PURPOSE: Pure transition function State + Event → State.
- *
- * No side effects, no mutation, no I/O. All cycle rules live here so the
- * discipline is visible as ordinary sequential code and is unit-testable in
- * isolation. Exhaustive `when` on both sealed hierarchies is intentional:
- * adding a new state/event without updating this function fails compilation.
- *
- * Kept for next-state math; export product tables prefer [step] (next + effects).
+ * No side effects. Export and [step] share this math.
  */
 fun transition(state: LightState, event: LightEvent): LightState = when (event) {
     LightEvent.Tick -> when (state) {
@@ -66,10 +50,8 @@ fun transition(state: LightState, event: LightEvent): LightState = when (event) 
 }
 
 /**
- * PURPOSE: Pure step that declares next state + [LightEffect]s without running them.
- *
- * Uses [transition] for successor math; wraps a light transition audit so
- * tests can assert the effect list without a log or I/O.
+ * PURPOSE: Pure step — next + audit (cross-cutting) + DriveLamp (domain).
+ * Does not touch log or [LightPort].
  */
 fun step(
     state: LightState,
@@ -86,33 +68,27 @@ fun step(
                 event = event.label(),
                 to = next.label(),
             ),
+            LightEffect.DriveLamp(next.label()),
         ),
     )
 }
 
 /**
- * PURPOSE: Thin mutable holder that applies pure [step] and interprets effects.
- *
- * Separates pure step math from the single side-effect boundary
- * (assign current + [interpretLight]). Not a reusable "engine" — just a
- * context that owns current state for demo/test convenience.
+ * PURPOSE: Boundary holder — assign state, then interpret to log + port.
  */
 class TrafficLight(
     initial: LightState = LightState.Red,
     private val log: TransitionLog? = null,
+    val port: LightPort = LightPort(),
     private val machineName: String = "TrafficLight",
 ) {
     var current: LightState = initial
         private set
 
-    /**
-     * Apply one pure step, assign the result, and interpret declared effects.
-     * @return the new current state (same reference as [current] after call)
-     */
     fun handle(event: LightEvent): LightState {
         val result = step(current, event, machineName)
         current = result.next
-        interpretLight(result.effects, log)
+        interpretLight(result.effects, log, port)
         return current
     }
 }

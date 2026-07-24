@@ -37,13 +37,24 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 There is **no global kitchen-sink `Effect` ADT**. Each behavior owns a sealed
 effect type and a local interpreter; pure steps return `StepResult<S, Efx>`.
 
-| Kind | What | Where |
-|------|------|--------|
-| **Cross-cutting** | Transition / entry / exit / refusal **audit** → same `TransitionLog` format | Shared `AuditEffect` + `AuditInterpreter`; each machine wraps audit in its ADT |
-| **Domain-specific** | Connection-only heartbeat counter | `ConnectionEffect.IncHeartbeat` only (not on Light/File/Door ADTs) |
+**Two sinks at the boundary:**
+
+| Sink | Kind | Role |
+|------|------|------|
+| `TransitionLog` | **Cross-cutting** | Shared audit shape (`AuditEffect` → same TRANSITION/ENTRY/EXIT/REFUSAL records) |
+| Machine **ports** | **Domain-specific** | In-memory actuators / I/O intents / session lifecycle (no real OS I/O) |
+
+| Machine | Cross-cutting (audit) | Domain (ports) |
+|---------|----------------------|----------------|
+| TrafficLight | `LightEffect.Audit` → log | `DriveLamp(color)` → `LightPort` |
+| FileProtocol | accept/refuse audit | `OpenHandle` / `ReadChunk` / `CloseHandle` → `FilePort` (**refuse = audit only**) |
+| Connection | entry/exit/transition/refusal | `OpenSession` / `CloseSession` / `IncHeartbeat` → `ConnectionPort` + counter |
+| Door regions | latch/swing transition audit | `EnergizeStrike` / `EngageDeadbolt` / `SoundChime` → `DoorPort` |
+| Door container | guard **refusal audit only** | *(none — refused Open does not sound chime)* |
 
 Type system separation: `List<LightEffect>` cannot hold `ConnectionEffect.IncHeartbeat`.
-Export product evaluation reads pure effect **labels** only (no interpreters).
+Export product evaluation reads pure effect **labels** only (no interpreters, no port mutation).
+Demo (`gradle run`) prints audit log **and** domain port snapshots side by side.
 
 ## Export tables and effects
 

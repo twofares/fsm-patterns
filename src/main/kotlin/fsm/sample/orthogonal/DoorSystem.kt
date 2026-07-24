@@ -7,20 +7,10 @@ import fsm.sample.logging.TransitionLog
  * PURPOSE: Orthogonal Component pattern — concurrent independent state machines
  * composed without a multi-region statechart engine.
  *
- * Research discipline: "compose independent state-machine objects, dispatch
- * events into components, and post events back to the container, instead of
- * one multi-region engine." Orthogonality avoids classical product-state
- * explosion: latch and swing are independent regions.
- *
- * Domain vignette: a door with two independent regions:
- *   Region A (LatchMachine):  Locked ↔ Unlocked
- *   Region B (SwingMachine):  Closed ↔ Open
- *
- * Container [DoorSystem] dispatches external events to the appropriate component(s).
- * Component steps declare [LatchEffect]/[SwingEffect] transition audits; container
- * guards declare [DoorEffect] refusals via pure [guardRefusalEffects]. Cross-cutting
- * audit format is shared ([AuditInterpreter] → [TransitionLog]); effect ADTs stay
- * per-region so domain types do not leak across machines.
+ * Effects:
+ * - **Cross-cutting** region/container audit → shared [TransitionLog]
+ * - **Domain** actuators (strike / deadbolt / chime) → shared [DoorPort]
+ * - Container **refusals are audit-only** (no domain actuators)
  */
 
 // --- Region A: Latch ---------------------------------------------------------
@@ -41,13 +31,13 @@ sealed class LatchEvent {
 }
 
 /**
- * PURPOSE: Independent component machine for the latch region.
- * Pure transition + pure step with [LatchEffect] transition audit; boundary interprets.
- * Kept separate so the orthogonal container composes objects, not product states.
+ * PURPOSE: Independent latch region machine.
+ * Pure [step] declares audit + domain actuator when becoming Locked/Unlocked.
  */
 class LatchMachine(
     initial: LatchState = LatchState.Locked,
     private val log: TransitionLog? = null,
+    private val port: DoorPort? = null,
     private val machineName: String = "Latch",
 ) {
     var current: LatchState = initial
@@ -59,14 +49,18 @@ class LatchMachine(
     }
 
     /**
-     * PURPOSE: Pure step for the latch region (next + transition audit).
-     * Export product tables call [step] so Effects columns match pure declarations.
+     * PURPOSE: Pure step — audit always; domain actuator only for target mode.
+     * Unlock → EnergizeStrike; Lock → EngageDeadbolt (even if already that mode).
      */
     fun step(
         state: LatchState,
         event: LatchEvent,
     ): StepResult<LatchState, LatchEffect> {
         val next = pureTransition(state, event)
+        val domain = when (event) {
+            LatchEvent.Unlock -> LatchEffect.EnergizeStrike
+            LatchEvent.Lock -> LatchEffect.EngageDeadbolt
+        }
         return StepResult(
             next = next,
             effects = listOf(
@@ -76,6 +70,7 @@ class LatchMachine(
                     event = event.label(),
                     to = next.label(),
                 ),
+                domain,
             ),
         )
     }
@@ -83,7 +78,7 @@ class LatchMachine(
     fun handle(event: LatchEvent): LatchState {
         val result = step(current, event)
         current = result.next
-        interpretLatch(result.effects, log)
+        interpretLatch(result.effects, log, port)
         return current
     }
 }
@@ -106,13 +101,13 @@ sealed class SwingEvent {
 }
 
 /**
- * PURPOSE: Independent component machine for the swing (open/closed) region.
- * Open-while-locked is refused by the container via a guard, not by merging
- * regions into one product machine.
+ * PURPOSE: Independent swing region machine.
+ * OpenDoor → SoundChime (domain); CloseDoor → audit only.
  */
 class SwingMachine(
     initial: SwingState = SwingState.Closed,
     private val log: TransitionLog? = null,
+    private val port: DoorPort? = null,
     private val machineName: String = "Swing",
 ) {
     var current: SwingState = initial
@@ -123,39 +118,35 @@ class SwingMachine(
         SwingEvent.CloseDoor -> SwingState.Closed
     }
 
-    /** PURPOSE: Pure step for the swing region (next + transition audit). */
     fun step(
         state: SwingState,
         event: SwingEvent,
     ): StepResult<SwingState, SwingEffect> {
         val next = pureTransition(state, event)
-        return StepResult(
-            next = next,
-            effects = listOf(
-                swingTransition(
-                    machine = machineName,
-                    from = state.label(),
-                    event = event.label(),
-                    to = next.label(),
-                ),
+        val effects = mutableListOf(
+            swingTransition(
+                machine = machineName,
+                from = state.label(),
+                event = event.label(),
+                to = next.label(),
             ),
         )
+        if (event is SwingEvent.OpenDoor) {
+            effects += SwingEffect.SoundChime
+        }
+        return StepResult(next = next, effects = effects)
     }
 
     fun handle(event: SwingEvent): SwingState {
         val result = step(current, event)
         current = result.next
-        interpretSwing(result.effects, log)
+        interpretSwing(result.effects, log, port)
         return current
     }
 }
 
 // --- External events for the container ---------------------------------------
 
-/**
- * PURPOSE: Container-level events. The orthogonal system maps these onto
- * component events (and optional guarded refusals).
- */
 sealed class DoorEvent {
     data object Unlock : DoorEvent()
     data object Lock : DoorEvent()
@@ -165,32 +156,22 @@ sealed class DoorEvent {
 }
 
 /**
- * PURPOSE: Orthogonal container — owns two independent component machines.
- *
- * Dispatch policy:
- * - Unlock/Lock → LatchMachine (lock refused while swing is Open)
- * - Open → SwingMachine only if latch is Unlocked; else refuse (guarded coupling)
- * - Close → SwingMachine
- *
- * Product configuration is observed as (latch × swing) without implementing a
- * flat 4-state product machine. Guards use pure [guardRefusalEffects]; boundary
- * [handle] interprets refusals or delegates to component [handle].
+ * PURPOSE: Orthogonal container — shared log + [DoorPort] for both regions.
+ * Refused Open/Lock: audit only, port unchanged.
  */
 class DoorSystem(
     val log: TransitionLog = TransitionLog(),
-    val latch: LatchMachine = LatchMachine(log = log),
-    val swing: SwingMachine = SwingMachine(log = log),
+    val port: DoorPort = DoorPort(),
+    val latch: LatchMachine = LatchMachine(log = log, port = port),
+    val swing: SwingMachine = SwingMachine(log = log, port = port),
 ) {
     val machineName: String = "DoorSystem"
 
-    /** Combined configuration label for demo/tests (observability only). */
     fun configuration(): String =
         "latch=${latch.current.label()}, swing=${swing.current.label()}"
 
     /**
-     * PURPOSE: Pure container guard — returns [DoorEffect] refusals when policy
-     * blocks [event], empty list when the event may be dispatched to a region.
-     * Does not mutate state or log; tests assert the list without the boundary.
+     * PURPOSE: Pure container guard — refusal effects are **audit-only**.
      */
     fun guardRefusalEffects(
         event: DoorEvent,
@@ -227,10 +208,6 @@ class DoorSystem(
         DoorEvent.Unlock, DoorEvent.Close -> emptyList()
     }
 
-    /**
-     * Dispatch an external event into the appropriate orthogonal component(s).
-     * @return true if the event was accepted by a component (or fully applied)
-     */
     fun handle(event: DoorEvent): Boolean {
         val refusal = guardRefusalEffects(event)
         if (refusal.isNotEmpty()) {

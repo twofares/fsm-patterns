@@ -87,6 +87,7 @@ sealed class OfferStep {
 class FileProtocol(
     initial: FileState = FileState.Closed,
     private val log: TransitionLog? = null,
+    val port: FilePort = FilePort(),
     private val machineName: String = "FileProtocol",
 ) {
     var current: FileState = initial
@@ -158,6 +159,12 @@ class FileProtocol(
             )
         }
         val next = pureWhenAccepted(state, event)
+        // Accept: cross-cutting audit + domain I/O intent for this engagement.
+        val domain = when (event) {
+            FileEvent.Open -> FileEffect.OpenHandle
+            FileEvent.Read -> FileEffect.ReadChunk
+            FileEvent.Close -> FileEffect.CloseHandle
+        }
         return OfferStep.Accepted(
             next = next,
             effects = listOf(
@@ -167,6 +174,7 @@ class FileProtocol(
                     event = event.label(),
                     to = next.label(),
                 ),
+                domain,
             ),
         )
     }
@@ -174,11 +182,12 @@ class FileProtocol(
     /**
      * PURPOSE: Offer an event (CSP engagement). Boundary: assign + interpret.
      * Maps sealed [OfferStep] to [OfferResult] without scanning effect types.
+     * Refuse paths apply audit only (no domain ops on [port]).
      */
     fun offer(event: FileEvent): OfferResult {
         val result = stepOffer(current, event)
         current = result.next
-        interpretFile(result.effects, log)
+        interpretFile(result.effects, log, port)
         return when (result) {
             is OfferStep.Accepted -> OfferResult.Accepted(result.next)
             is OfferStep.Refused -> OfferResult.Refused(result.reason)

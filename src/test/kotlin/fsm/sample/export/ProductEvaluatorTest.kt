@@ -69,6 +69,7 @@ class ProductEvaluatorTest {
                 assertEquals(pure.next.label(), row.to)
                 assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
                 assertTrue(row.effects.contains("LogTransition"), "row=$row")
+                assertTrue(row.effects.any { it.startsWith("DriveLamp") }, "row=$row")
             }
         }
     }
@@ -108,6 +109,12 @@ class ProductEvaluatorTest {
                     is OfferStep.Accepted -> {
                         assertEquals(TransitionKind.ACCEPTED, row.kind)
                         assertTrue(row.effects.contains("LogTransition"))
+                        assertTrue(
+                            row.effects.any {
+                                it == "OpenHandle" || it == "ReadChunk" || it == "CloseHandle"
+                            },
+                            "accepted row should declare domain I/O: $row",
+                        )
                     }
                     is OfferStep.Refused -> {
                         assertEquals(TransitionKind.REFUSED, row.kind)
@@ -152,6 +159,10 @@ class ProductEvaluatorTest {
                 val row = latchTable.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
                 assertTrue(row.effects.contains("LogTransition"))
+                assertTrue(
+                    row.effects.contains("EnergizeStrike") || row.effects.contains("EngageDeadbolt"),
+                    "latch domain: $row",
+                )
             }
         }
         for (s in listOf(SwingState.Closed, SwingState.Open)) {
@@ -159,6 +170,9 @@ class ProductEvaluatorTest {
                 val pure = swing.step(s, e)
                 val row = swingTable.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
+                if (e is SwingEvent.OpenDoor) {
+                    assertTrue(row.effects.contains("SoundChime"), "row=$row")
+                }
             }
         }
     }
@@ -237,14 +251,20 @@ class ProductEvaluatorTest {
             }
         }
 
-        // Golden lists for representative hierarchy shapes
+        // Golden lists: audit + domain session lifecycle on Online enter/exit only
         val connect = table.rows.single { it.from == Offline.name && it.event == ConnEvent.Connect.label() }
         assertEquals(
-            listOf("LogExit(Offline)", "LogTransition", "LogEntry(Online)", "LogEntry(Idle)"),
+            listOf(
+                "LogExit(Offline)",
+                "LogTransition",
+                "LogEntry(Online)",
+                "OpenSession",
+                "LogEntry(Idle)",
+            ),
             connect.effects,
         )
 
-        // Same-parent sibling: Idle → Transferring (exit Idle only, enter Transferring)
+        // Same-parent sibling: Idle → Transferring (no OpenSession — stay under Online)
         val start = table.rows.single {
             it.from == Idle.name && it.event == ConnEvent.StartTransfer.label()
         }
@@ -253,12 +273,18 @@ class ProductEvaluatorTest {
             start.effects,
         )
 
-        // Cross-hierarchy disconnect: Transferring → Offline
+        // Cross-hierarchy disconnect: Transferring → Offline (CloseSession with Online exit)
         val disc = table.rows.single {
             it.from == Transferring.name && it.event == ConnEvent.Disconnect.label()
         }
         assertEquals(
-            listOf("LogExit(Transferring)", "LogExit(Online)", "LogTransition", "LogEntry(Offline)"),
+            listOf(
+                "LogExit(Transferring)",
+                "LogExit(Online)",
+                "CloseSession",
+                "LogTransition",
+                "LogEntry(Offline)",
+            ),
             disc.effects,
         )
 

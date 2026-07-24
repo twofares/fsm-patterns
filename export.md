@@ -10,12 +10,12 @@ Stdlib only — no FSM/statechart engines.
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Red | Tick | Green | ACCEPTED | LogTransition |  |
-| Red | Emergency | Red | ACCEPTED | LogTransition |  |
-| Green | Tick | Yellow | ACCEPTED | LogTransition |  |
-| Green | Emergency | Red | ACCEPTED | LogTransition |  |
-| Yellow | Tick | Red | ACCEPTED | LogTransition |  |
-| Yellow | Emergency | Red | ACCEPTED | LogTransition |  |
+| Red | Tick | Green | ACCEPTED | LogTransition, DriveLamp(Green) |  |
+| Red | Emergency | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
+| Green | Tick | Yellow | ACCEPTED | LogTransition, DriveLamp(Yellow) |  |
+| Green | Emergency | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
+| Yellow | Tick | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
+| Yellow | Emergency | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
 
 ```mermaid
 stateDiagram-v2
@@ -37,12 +37,12 @@ stateDiagram-v2
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Closed | Open | Opened | ACCEPTED | LogTransition |  |
+| Closed | Open | Opened | ACCEPTED | LogTransition, OpenHandle |  |
 | Closed | Read | Closed | REFUSED | LogRefusal | not in menu |
 | Closed | Close | Closed | REFUSED | LogRefusal | not in menu |
 | Opened | Open | Opened | REFUSED | LogRefusal | not in menu |
-| Opened | Read | Opened | ACCEPTED | LogTransition |  |
-| Opened | Close | Closed | ACCEPTED | LogTransition |  |
+| Opened | Read | Opened | ACCEPTED | LogTransition, ReadChunk |  |
+| Opened | Close | Closed | ACCEPTED | LogTransition, CloseHandle |  |
 
 ```mermaid
 stateDiagram-v2
@@ -60,18 +60,18 @@ stateDiagram-v2
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Offline | Connect | Idle | ACCEPTED | LogExit(Offline), LogTransition, LogEntry(Online), LogEntry(Idle) |  |
+| Offline | Connect | Idle | ACCEPTED | LogExit(Offline), LogTransition, LogEntry(Online), OpenSession, LogEntry(Idle) |  |
 | Offline | Disconnect | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Offline | StartTransfer | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Offline | FinishTransfer | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Offline | Heartbeat | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Idle | Connect | Idle | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Idle | Disconnect | Offline | ACCEPTED | LogExit(Idle), LogExit(Online), LogTransition, LogEntry(Offline) |  |
+| Idle | Disconnect | Offline | ACCEPTED | LogExit(Idle), LogExit(Online), CloseSession, LogTransition, LogEntry(Offline) |  |
 | Idle | StartTransfer | Transferring | ACCEPTED | LogExit(Idle), LogTransition, LogEntry(Transferring) |  |
 | Idle | FinishTransfer | Idle | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Idle | Heartbeat | Idle | ACCEPTED | IncHeartbeat, LogTransition |  |
 | Transferring | Connect | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Transferring | Disconnect | Offline | ACCEPTED | LogExit(Transferring), LogExit(Online), LogTransition, LogEntry(Offline) |  |
+| Transferring | Disconnect | Offline | ACCEPTED | LogExit(Transferring), LogExit(Online), CloseSession, LogTransition, LogEntry(Offline) |  |
 | Transferring | StartTransfer | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Transferring | FinishTransfer | Idle | ACCEPTED | LogExit(Transferring), LogTransition, LogEntry(Idle) |  |
 | Transferring | Heartbeat | Transferring | ACCEPTED | IncHeartbeat, LogTransition |  |
@@ -100,31 +100,31 @@ stateDiagram-v2
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Locked | Lock | Locked | ACCEPTED | LogTransition | region=Latch |
-| Locked | Unlock | Unlocked | ACCEPTED | LogTransition | region=Latch |
-| Unlocked | Lock | Locked | ACCEPTED | LogTransition | region=Latch |
-| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition | region=Latch |
-| Closed | OpenDoor | Open | ACCEPTED | LogTransition | region=Swing |
+| Locked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt | region=Latch |
+| Locked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike | region=Latch |
+| Unlocked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt | region=Latch |
+| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike | region=Latch |
+| Closed | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime | region=Swing |
 | Closed | CloseDoor | Closed | ACCEPTED | LogTransition | region=Swing |
-| Open | OpenDoor | Open | ACCEPTED | LogTransition | region=Swing |
+| Open | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime | region=Swing |
 | Open | CloseDoor | Closed | ACCEPTED | LogTransition | region=Swing |
 
 ### Latch transition table
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Locked | Lock | Locked | ACCEPTED | LogTransition |  |
-| Locked | Unlock | Unlocked | ACCEPTED | LogTransition |  |
-| Unlocked | Lock | Locked | ACCEPTED | LogTransition |  |
-| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition |  |
+| Locked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt |  |
+| Locked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike |  |
+| Unlocked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt |  |
+| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike |  |
 
 ### Swing transition table
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Closed | OpenDoor | Open | ACCEPTED | LogTransition |  |
+| Closed | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime |  |
 | Closed | CloseDoor | Closed | ACCEPTED | LogTransition |  |
-| Open | OpenDoor | Open | ACCEPTED | LogTransition |  |
+| Open | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime |  |
 | Open | CloseDoor | Closed | ACCEPTED | LogTransition |  |
 
 ```mermaid

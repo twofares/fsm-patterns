@@ -10,25 +10,51 @@ import fsm.sample.effect.exportLabel
 import fsm.sample.logging.TransitionLog
 
 /**
- * PURPOSE: Connection **domain** effect ADT — teaches domain-specific vs cross-cutting.
+ * PURPOSE: Connection **domain** effect ADT — rich domain vs cross-cutting demo.
  *
- * - [IncHeartbeat]: **domain-specific** to this machine only (not on TrafficLight /
- *   FileProtocol / Door). Pure Online superstate handlers declare it; the local
- *   interpreter bumps [ConnectionContext.heartbeatCount].
- * - [Audit]: **cross-cutting** transition/entry/exit/refusal audit shared via
- *   [AuditEffect] + [AuditInterpreter] → same [TransitionLog] format as other machines.
+ * Cross-cutting ([Audit]):
+ * - LogTransition / LogEntry / LogExit / LogRefusal → [TransitionLog]
  *
- * Separate sealed hierarchy: a [LightEffect] list cannot hold [IncHeartbeat].
+ * Domain-specific (this machine only):
+ * - [IncHeartbeat] — Online superstate reaction
+ * - [OpenSession] — session lifecycle when entering Online composite
+ * - [CloseSession] — session lifecycle when leaving Online composite
+ *
+ * Separate sealed hierarchy: [LightEffect] cannot hold these domain cases.
  */
 sealed class ConnectionEffect {
-    /** Cross-cutting audit wrapper (entry / exit / transition / refusal). */
     data class Audit(val audit: AuditEffect) : ConnectionEffect()
 
-    /**
-     * Domain-only: bump heartbeat counter at the Connection boundary.
-     * Declared by pure-ish Online handlers; never mutates during step evaluation.
-     */
     data object IncHeartbeat : ConnectionEffect()
+
+    /** Domain: open network session (paired with Online enter). */
+    data object OpenSession : ConnectionEffect()
+
+    /** Domain: close network session (paired with Online exit). */
+    data object CloseSession : ConnectionEffect()
+}
+
+/** PURPOSE: Domain session ops recorded on [ConnectionPort]. */
+sealed class SessionOp {
+    data object Opened : SessionOp()
+    data object Closed : SessionOp()
+    fun label(): String = this::class.simpleName ?: toString()
+}
+
+/** PURPOSE: In-memory domain port for connection session lifecycle. */
+class ConnectionPort {
+    private val _sessions = mutableListOf<SessionOp>()
+    val sessions: List<SessionOp> get() = _sessions.toList()
+
+    fun record(op: SessionOp) {
+        _sessions += op
+    }
+
+    fun clear() {
+        _sessions.clear()
+    }
+
+    fun snapshot(): String = "sessions=${sessions.map { it.label() }}"
 }
 
 fun connTransition(
@@ -58,28 +84,30 @@ fun connRefusal(
 ): ConnectionEffect = ConnectionEffect.Audit(auditRefusal(machine, state, event, reason))
 
 /**
- * PURPOSE: Local Connection interpreter — audit via cross-cutting path; heartbeat domain-local.
- *
- * [onIncHeartbeat] is **required** (non-null): domain [ConnectionEffect.IncHeartbeat] must not
- * silently vanish. Call sites that only need pure labels must not invoke this interpreter
- * (use [ConnectionEffect.exportLabel] / product evaluation instead).
- * Null [log] still drops audit only (observability optional); heartbeat always runs.
+ * PURPOSE: Local Connection interpreter.
+ * - Audit → [log]
+ * - IncHeartbeat → required [onIncHeartbeat]
+ * - OpenSession / CloseSession → [port]
  */
 fun interpretConnection(
     effects: List<ConnectionEffect>,
     log: TransitionLog? = null,
+    port: ConnectionPort? = null,
     onIncHeartbeat: () -> Unit,
 ) {
     for (effect in effects) {
         when (effect) {
             is ConnectionEffect.Audit -> AuditInterpreter.applyOne(effect.audit, log)
             ConnectionEffect.IncHeartbeat -> onIncHeartbeat()
+            ConnectionEffect.OpenSession -> port?.record(SessionOp.Opened)
+            ConnectionEffect.CloseSession -> port?.record(SessionOp.Closed)
         }
     }
 }
 
-/** PURPOSE: Export short names (IncHeartbeat is domain-only; audit labels shared). */
 fun ConnectionEffect.exportLabel(): String = when (this) {
     is ConnectionEffect.Audit -> audit.exportLabel()
     ConnectionEffect.IncHeartbeat -> "IncHeartbeat"
+    ConnectionEffect.OpenSession -> "OpenSession"
+    ConnectionEffect.CloseSession -> "CloseSession"
 }

@@ -1,12 +1,14 @@
 package fsm.sample
 
 import fsm.sample.csp.FileEvent
+import fsm.sample.csp.FileEffect
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
-import fsm.sample.csp.FileEffect
+import fsm.sample.csp.exportLabel
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
 import fsm.sample.flat.TrafficLight
+import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
@@ -15,91 +17,90 @@ import fsm.sample.orthogonal.DoorEvent
 import fsm.sample.orthogonal.DoorSystem
 
 /**
- * PURPOSE: Runnable demo entry that exercises multiple research disciplines
- * in ordinary Kotlin without any FSM/statechart library or engine.
+ * PURPOSE: Demo of **cross-cutting audit** vs **domain-specific** effects.
  *
- * Patterns shown in one fixed script (same inputs every run for consistency):
- * 1. Flat sealed FSM + pure steps + LightEffect audit boundary (TrafficLight)
- * 2. GoF State + hierarchical delegation + ConnectionEffect (audit + IncHeartbeat)
- * 3. Orthogonal Component composition (DoorSystem / Latch / Swing effects)
- * 4. CSP-style alphabet + menu + FileEffect refusal/accept (FileProtocol)
+ * For each vignette:
+ * 1. Pure effect list (declare only)
+ * 2. After boundary: TransitionLog (cross-cutting sink)
+ * 3. Domain port snapshot (machine-local sink)
  *
- * **Domain-specific vs cross-cutting:** Connection alone declares IncHeartbeat;
- * all machines share audit → TransitionLog via per-machine interpreters.
- *
- * Output is deterministic so two launches can be compared for consistency.
+ * Cross-cutting: AuditEffect → same log record format for all machines.
+ * Domain: DriveLamp, OpenHandle/ReadChunk/CloseHandle, OpenSession/CloseSession/
+ * IncHeartbeat, EnergizeStrike/EngageDeadbolt/SoundChime — never on foreign ADTs.
  */
 fun main() {
-    val out = StringBuilder()
     fun line(s: String = "") {
-        out.appendLine(s)
         println(s)
     }
 
-    line("=== FSM / Statechart / CSP Patterns Sample (no libraries/engines) ===")
+    line("=== Domain-specific vs cross-cutting effects (no libraries/engines) ===")
     line()
 
-    // --- 1. Flat pure FSM + light-local effects ------------------------------
-    line("--- Pattern: Flat sealed FSM (pure step → LightEffect, boundary runs them) ---")
+    // --- 1. TrafficLight -----------------------------------------------------
+    line("--- TrafficLight: Audit (cross-cutting) + DriveLamp (domain) ---")
     val pureStep = step(LightState.Red, LightEvent.Tick)
-    line("pure step effects (no I/O): ${pureStep.effects}")
+    line("pure step effects: ${pureStep.effects.map { it.exportLabel() }}")
     val flatLog = TransitionLog()
     val light = TrafficLight(log = flatLog)
-    line("initial=${light.current.label()}")
     light.handle(LightEvent.Tick)
     light.handle(LightEvent.Tick)
     light.handle(LightEvent.Emergency)
     line("final=${light.current.label()}")
+    line("AUDIT log:")
     line(flatLog.formatAll())
+    line("DOMAIN port: ${light.port.snapshot()}")
     line()
 
-    // --- 2. GoF + hierarchical + domain heartbeat + audit --------------------
-    line("--- Pattern: GoF State + hierarchical + ConnectionEffect (audit + IncHeartbeat) ---")
+    // --- 2. Connection -------------------------------------------------------
+    line("--- Connection: Audit + OpenSession/CloseSession/IncHeartbeat (domain) ---")
     val connLog = TransitionLog()
     val conn = ConnectionContext(log = connLog)
-    line("initial=${conn.current.name}")
-    conn.handle(ConnEvent.Connect)          // Offline → Idle (enter Online, Idle)
-    conn.handle(ConnEvent.Heartbeat)        // IncHeartbeat + LogTransition via boundary
-    conn.handle(ConnEvent.StartTransfer)    // Idle → Transferring
-    conn.handle(ConnEvent.FinishTransfer)   // Transferring → Idle
-    conn.handle(ConnEvent.Disconnect)       // Idle → Offline (via Online)
-    // Illegal at Offline: refuse
+    conn.handle(ConnEvent.Connect)
+    conn.handle(ConnEvent.Heartbeat)
     conn.handle(ConnEvent.StartTransfer)
+    conn.handle(ConnEvent.FinishTransfer)
+    conn.handle(ConnEvent.Disconnect)
+    conn.handle(ConnEvent.StartTransfer) // refuse
     line("final=${conn.current.name} heartbeats=${conn.heartbeatCount}")
+    line("AUDIT log:")
     line(connLog.formatAll())
+    line("DOMAIN port: ${conn.port.snapshot()}")
     line()
 
-    // --- 3. Orthogonal components --------------------------------------------
-    line("--- Pattern: Orthogonal Component (Latch ∥ Swing) ---")
+    // --- 3. Door (orthogonal) ------------------------------------------------
+    line("--- Door: region actuators (domain); guard refusals audit-only ---")
     val door = DoorSystem()
-    line("initial=${door.configuration()}")
-    door.handle(DoorEvent.Open)    // refuse: locked
+    door.handle(DoorEvent.Open) // refuse locked — audit only
+    line("after refused Open: domain ${door.port.snapshot()}")
     door.handle(DoorEvent.Unlock)
     door.handle(DoorEvent.Open)
-    door.handle(DoorEvent.Lock)    // refuse: still open
+    door.handle(DoorEvent.Lock) // refuse open
     door.handle(DoorEvent.Close)
     door.handle(DoorEvent.Lock)
     line("final=${door.configuration()}")
+    line("AUDIT log:")
     line(door.log.formatAll())
+    line("DOMAIN port: ${door.port.snapshot()}")
     line()
 
-    // --- 4. CSP-style process + FileEffect -----------------------------------
-    line("--- Pattern: CSP process (alphabet, menu, FileEffect accept/refuse) ---")
+    // --- 4. FileProtocol (CSP) -----------------------------------------------
+    line("--- FileProtocol: accept → OpenHandle/ReadChunk/CloseHandle; refuse → audit only ---")
     val cspLog = TransitionLog()
     val file = FileProtocol(log = cspLog)
-    val refusedStep = file.stepOffer(FileState.Closed, FileEvent.Read)
-    line("pure refuse step: $refusedStep")
+    val refused = file.stepOffer(FileState.Closed, FileEvent.Read)
     line(
-        "pure refuse step effects: ${refusedStep.effects.filterIsInstance<FileEffect.Audit>()}",
+        "pure refuse effects (no domain I/O): ${refused.effects.map { it.exportLabel() }}",
     )
-    line("initial=${file.current.label()} menu=${file.menu().map { it.label() }}")
-    file.offer(FileEvent.Read)   // refuse: not in menu while Closed
+    file.offer(FileEvent.Read)
+    line("after refuse offer: domain ${file.port.snapshot()}")
     file.offer(FileEvent.Open)
     file.offer(FileEvent.Read)
     file.offer(FileEvent.Close)
-    line("final=${file.current.label()} menu=${file.menu().map { it.label() }}")
+    line("final=${file.current.label()}")
+    line("AUDIT log:")
     line(cspLog.formatAll())
+    line("DOMAIN port: ${file.port.snapshot()}")
     line()
 
-    line("=== Demo complete: flat, hierarchical/GoF, orthogonal, CSP (per-behavior effects) ===")
+    line("=== Demo complete: dual sinks (audit log vs domain ports) ===")
 }

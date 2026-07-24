@@ -103,6 +103,19 @@ data object Online : ConnState() {
     override val name: String = "Online"
     override val parent: ConnState? get() = null
 
+    /**
+     * PURPOSE: Enter Online = cross-cutting entry audit + **domain** OpenSession.
+     * Fires only when the LCA path includes Online (not on Idle↔Transferring).
+     */
+    override fun enterEffects(machineName: String): List<ConnectionEffect> =
+        listOf(connEntry(machineName, name), ConnectionEffect.OpenSession)
+
+    /**
+     * PURPOSE: Exit Online = cross-cutting exit audit + **domain** CloseSession.
+     */
+    override fun exitEffects(machineName: String): List<ConnectionEffect> =
+        listOf(connExit(machineName, name), ConnectionEffect.CloseSession)
+
     override fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult = when (event) {
         ConnEvent.Disconnect -> HandleResult.Handled(Offline)
         ConnEvent.Heartbeat -> {
@@ -279,6 +292,7 @@ fun dispatchWithDelegation(
 class ConnectionContext(
     initial: ConnState = Offline,
     val log: TransitionLog? = null,
+    val port: ConnectionPort = ConnectionPort(),
     val machineName: String = "Connection",
     applyInitialEntry: Boolean = true,
 ) {
@@ -338,7 +352,7 @@ class ConnectionContext(
         fsm.sample.gof.planTransition(from, to, event, handlerEffects, machineName)
 
     private fun applyEffects(effects: List<ConnectionEffect>) {
-        interpretConnection(effects, log) {
+        interpretConnection(effects, log, port) {
             heartbeatCount += 1
         }
     }
