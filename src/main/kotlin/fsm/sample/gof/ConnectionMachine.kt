@@ -1,7 +1,5 @@
 package fsm.sample.gof
 
-import fsm.sample.effect.Effect
-import fsm.sample.effect.EffectInterpreter
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -11,8 +9,9 @@ import fsm.sample.logging.TransitionLog
  * 1. GoF State: context holds current state object; transitions replace it.
  * 2. Hierarchical FSMs: composite/leaf states; unhandled events bubble to parent
  *    (behavioral inheritance — program only differences from the superstate).
- * 3. Entry/exit / heartbeat as *declared* [Effect]s: pure-ish handlers return
- *    next leaf + effects; the context boundary interprets them (log, counters).
+ * 3. Entry/exit / heartbeat as *declared* [ConnectionEffect]s: pure-ish handlers
+ *    return next leaf + effects; the context boundary interprets them
+ *    ([interpretConnection]: cross-cutting audit + domain IncHeartbeat).
  *
  * Domain vignette: a network connection with hierarchy
  *   Offline (leaf)
@@ -23,7 +22,7 @@ import fsm.sample.logging.TransitionLog
  * Events unhandled in Idle/Transferring may still be handled by Online.
  *
  * Export product evaluation uses pure [planTransition] / [declaredEffects] and
- * probe contexts with [applyInitialEntry]=false so [EffectInterpreter] is never
+ * probe contexts with [applyInitialEntry]=false so [interpretConnection] is never
  * invoked during documentation generation.
  */
 
@@ -42,14 +41,14 @@ sealed class ConnEvent {
 /**
  * PURPOSE: Result of handling an event in a state object.
  * - [Handled] carries the next leaf state and any effects declared by the handler
- *   (e.g. [Effect.IncHeartbeat]); entry/exit/transition effects are assembled
+ *   (e.g. [ConnectionEffect.IncHeartbeat]); entry/exit/transition effects are assembled
  *   via pure [declaredEffects] / [planTransition] before the boundary applies them.
  * - [Unhandled] means "delegate to parent" (hierarchical discipline).
  */
 sealed class HandleResult {
     data class Handled(
         val next: ConnState,
-        val effects: List<Effect> = emptyList(),
+        val effects: List<ConnectionEffect> = emptyList(),
     ) : HandleResult()
 
     data object Unhandled : HandleResult()
@@ -61,19 +60,19 @@ sealed class HandleResult {
  * [parent] links form the superstate chain. Leaf states override [onEvent];
  * composite Online also handles events that leaves leave unhandled.
  * Entry/exit are pure effect *declarations* ([enterEffects]/[exitEffects]);
- * the context boundary runs them via [EffectInterpreter].
+ * the context boundary runs them via [interpretConnection].
  */
 sealed class ConnState {
     abstract val name: String
     open val parent: ConnState? get() = null
 
-    /** PURPOSE: Pure entry effect declaration (no I/O). */
-    open fun enterEffects(machineName: String): List<Effect> =
-        listOf(Effect.LogEntry(machineName, name))
+    /** PURPOSE: Pure entry effect declaration (cross-cutting audit; no I/O). */
+    open fun enterEffects(machineName: String): List<ConnectionEffect> =
+        listOf(connEntry(machineName, name))
 
-    /** PURPOSE: Pure exit effect declaration (no I/O). */
-    open fun exitEffects(machineName: String): List<Effect> =
-        listOf(Effect.LogExit(machineName, name))
+    /** PURPOSE: Pure exit effect declaration (cross-cutting audit; no I/O). */
+    open fun exitEffects(machineName: String): List<ConnectionEffect> =
+        listOf(connExit(machineName, name))
 
     /**
      * PURPOSE: Per-state behavior. Default is Unhandled so events bubble up.
@@ -107,8 +106,8 @@ data object Online : ConnState() {
     override fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult = when (event) {
         ConnEvent.Disconnect -> HandleResult.Handled(Offline)
         ConnEvent.Heartbeat -> {
-            // Superstate-only reaction: stay in current leaf; declare heartbeat effect.
-            HandleResult.Handled(ctx.current, listOf(Effect.IncHeartbeat))
+            // Superstate-only reaction: stay in current leaf; declare **domain** heartbeat.
+            HandleResult.Handled(ctx.current, listOf(ConnectionEffect.IncHeartbeat))
         }
         else -> HandleResult.Unhandled
     }
@@ -164,29 +163,29 @@ fun commonPrefixLength(a: List<ConnState>, b: List<ConnState>): Int {
  * PURPOSE: Pure assembly of hierarchical transition effects (LCA discipline).
  *
  * Order (UML-style): exit (innermost→outermost, exclusive of LCA) →
- * [Effect.LogTransition] → [handlerEffects] (transition actions) →
+ * transition audit → [handlerEffects] (transition actions, e.g. IncHeartbeat) →
  * enter (outermost→innermost, exclusive of LCA).
  *
- * No [ConnectionContext], assign, or [EffectInterpreter] — safe for export and tests.
+ * No [ConnectionContext], assign, or [interpretConnection] — safe for export and tests.
  */
 fun planTransition(
     from: ConnState,
     to: ConnState,
     event: ConnEvent,
-    handlerEffects: List<Effect> = emptyList(),
+    handlerEffects: List<ConnectionEffect> = emptyList(),
     machineName: String = "Connection",
-): List<Effect> {
+): List<ConnectionEffect> {
     val fromPath = pathFromRoot(from)
     val toPath = pathFromRoot(to)
     val lcaIndex = commonPrefixLength(fromPath, toPath)
-    val effects = mutableListOf<Effect>()
+    val effects = mutableListOf<ConnectionEffect>()
 
     // Exit states exclusive of LCA, from leaf toward root.
     for (i in fromPath.lastIndex downTo lcaIndex) {
         effects += fromPath[i].exitEffects(machineName)
     }
 
-    effects += Effect.LogTransition(
+    effects += connTransition(
         machine = machineName,
         from = from.name,
         event = event.label(),
@@ -210,23 +209,23 @@ fun planTransition(
  * Shared by [ConnectionContext.handle] and export product evaluation so assembly
  * cannot drift:
  * - real transition → [planTransition]
- * - same-leaf handled → handler effects + LogTransition
- * - unhandled → LogRefusal
+ * - same-leaf handled → handler effects + transition audit
+ * - unhandled → refusal audit
  *
- * Does not assign state or call [EffectInterpreter].
+ * Does not assign state or call [interpretConnection].
  */
 fun declaredEffects(
     from: ConnState,
     event: ConnEvent,
     result: HandleResult,
     machineName: String = "Connection",
-): List<Effect> = when (result) {
+): List<ConnectionEffect> = when (result) {
     is HandleResult.Handled -> {
         val next = result.next
         if (next !== from) {
             planTransition(from, next, event, result.effects, machineName)
         } else {
-            result.effects + Effect.LogTransition(
+            result.effects + connTransition(
                 machine = machineName,
                 from = from.name,
                 event = event.label(),
@@ -235,7 +234,7 @@ fun declaredEffects(
         }
     }
     HandleResult.Unhandled -> listOf(
-        Effect.LogRefusal(
+        connRefusal(
             machine = machineName,
             state = from.name,
             event = event.label(),
@@ -270,12 +269,12 @@ fun dispatchWithDelegation(
  * Transition algorithm (ordinary code, not an engine):
  * 1. Try current leaf; if Unhandled, walk parent chain until Handled or root.
  * 2. Assemble pure [declaredEffects] from the probe result.
- * 3. [EffectInterpreter.apply] while [current] is still the old leaf when needed
+ * 3. [interpretConnection] while [current] is still the old leaf when needed
  *    ("exit while still in old state"), then assign [current] if the leaf changed.
  *
  * [applyInitialEntry]: when true (default), init enters the initial ancestry via
  * the interpreter. Export/product probes pass false so construction never calls
- * [EffectInterpreter].
+ * [interpretConnection].
  */
 class ConnectionContext(
     initial: ConnState = Offline,
@@ -288,7 +287,8 @@ class ConnectionContext(
 
     /**
      * Heartbeat counter applied only at the effect boundary (not in onEvent).
-     * Private setter so handlers cannot bypass [EffectInterpreter] via mutation.
+     * Private setter so handlers cannot bypass [interpretConnection] via mutation.
+     * Domain-specific: only ConnectionEffect.IncHeartbeat bumps this.
      */
     var heartbeatCount: Int = 0
         private set
@@ -333,11 +333,12 @@ class ConnectionContext(
         from: ConnState,
         to: ConnState,
         event: ConnEvent,
-        handlerEffects: List<Effect> = emptyList(),
-    ): List<Effect> = fsm.sample.gof.planTransition(from, to, event, handlerEffects, machineName)
+        handlerEffects: List<ConnectionEffect> = emptyList(),
+    ): List<ConnectionEffect> =
+        fsm.sample.gof.planTransition(from, to, event, handlerEffects, machineName)
 
-    private fun applyEffects(effects: List<Effect>) {
-        EffectInterpreter.apply(effects, log) {
+    private fun applyEffects(effects: List<ConnectionEffect>) {
+        interpretConnection(effects, log) {
             heartbeatCount += 1
         }
     }

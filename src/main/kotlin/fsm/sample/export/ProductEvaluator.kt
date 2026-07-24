@@ -4,9 +4,11 @@ import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.OfferStep
+import fsm.sample.csp.exportLabel
 import fsm.sample.effect.StepResult
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
+import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnState
@@ -18,12 +20,14 @@ import fsm.sample.gof.Online
 import fsm.sample.gof.Transferring
 import fsm.sample.gof.declaredEffects
 import fsm.sample.gof.dispatchWithDelegation
+import fsm.sample.gof.exportLabel
 import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
 import fsm.sample.orthogonal.SwingEvent
 import fsm.sample.orthogonal.SwingMachine
 import fsm.sample.orthogonal.SwingState
+import fsm.sample.orthogonal.exportLabel
 
 /**
  * PURPOSE: Method 1 from research — exhaustive product evaluation of pure
@@ -34,24 +38,25 @@ import fsm.sample.orthogonal.SwingState
  * [TransitionTable] rows including short effect labels. Stdlib-only: no
  * reflection; domains listed explicitly from sealed sets.
  *
- * Never calls [fsm.sample.effect.EffectInterpreter], handle, or offer during
- * export — only pure step / stepOffer / planTransition / declaredEffects, plus
- * hierarchical onEvent probes on contexts with applyInitialEntry=false.
+ * Never calls per-machine interpreters, handle, or offer during export — only
+ * pure step / stepOffer / planTransition / declaredEffects, plus hierarchical
+ * onEvent probes on contexts with applyInitialEntry=false.
  */
 
 // --- Generic product helpers -------------------------------------------------
 
 /**
  * PURPOSE: Evaluate a total pure step on the Cartesian product.
- * Every pair is ACCEPTED; [effects] come from [StepResult.effects].
+ * Every pair is ACCEPTED; [effects] come from [StepResult.effects] labels.
  */
-fun <S, E> productEvaluateTotal(
+fun <S, Ev, Efx> productEvaluateTotal(
     machine: String,
     states: List<S>,
-    events: List<E>,
+    events: List<Ev>,
     stateLabel: (S) -> String,
-    eventLabel: (E) -> String,
-    step: (S, E) -> StepResult<S>,
+    eventLabel: (Ev) -> String,
+    step: (S, Ev) -> StepResult<S, Efx>,
+    effectLabel: (Efx) -> String,
 ): TransitionTable {
     val rows = mutableListOf<TransitionRow>()
     for (s in states) {
@@ -62,7 +67,7 @@ fun <S, E> productEvaluateTotal(
                 event = eventLabel(e),
                 to = stateLabel(result.next),
                 kind = TransitionKind.ACCEPTED,
-                effects = effectShortNames(result.effects),
+                effects = effectShortNames(result.effects, effectLabel),
             )
         }
     }
@@ -73,7 +78,7 @@ fun <S, E> productEvaluateTotal(
 
 /**
  * PURPOSE: Complete transition table for TrafficLight via pure [step].
- * Domain: all LightState × all LightEvent; effects from StepResult.
+ * Domain: all LightState × all LightEvent; effects from StepResult&lt;LightEffect&gt;.
  */
 fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
     machine = "TrafficLight",
@@ -82,11 +87,12 @@ fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
     stateLabel = { it.label() },
     eventLabel = { it.label() },
     step = { s, e -> step(s, e) },
+    effectLabel = { it.exportLabel() },
 )
 
 /**
  * PURPOSE: Complete CSP table for FileProtocol via pure [FileProtocol.stepOffer].
- * Non-menu alphabet events are REFUSED with LogRefusal effects.
+ * Non-menu alphabet events are REFUSED with FileEffect audit refusals.
  * No [FileProtocol.offer] / interpreter — pure product only.
  */
 fun evaluateFileProtocol(): TransitionTable {
@@ -103,14 +109,14 @@ fun evaluateFileProtocol(): TransitionTable {
                     event = e.label(),
                     to = result.next.label(),
                     kind = TransitionKind.ACCEPTED,
-                    effects = effectShortNames(result.effects),
+                    effects = effectShortNames(result.effects) { it.exportLabel() },
                 )
                 is OfferStep.Refused -> rows += TransitionRow(
                     from = s.label(),
                     event = e.label(),
                     to = result.next.label(),
                     kind = TransitionKind.REFUSED,
-                    effects = effectShortNames(result.effects),
+                    effects = effectShortNames(result.effects) { it.exportLabel() },
                     note = "not in menu",
                 )
             }
@@ -120,7 +126,7 @@ fun evaluateFileProtocol(): TransitionTable {
 }
 
 /**
- * PURPOSE: Latch region pure product via [LatchMachine.step] (next + effects).
+ * PURPOSE: Latch region pure product via [LatchMachine.step] (next + LatchEffect).
  */
 fun evaluateLatchRegion(): TransitionTable {
     val machine = LatchMachine()
@@ -131,11 +137,12 @@ fun evaluateLatchRegion(): TransitionTable {
         stateLabel = { it.label() },
         eventLabel = { it.label() },
         step = { s, e -> machine.step(s, e) },
+        effectLabel = { it.exportLabel() },
     )
 }
 
 /**
- * PURPOSE: Swing region pure product via [SwingMachine.step] (next + effects).
+ * PURPOSE: Swing region pure product via [SwingMachine.step] (next + SwingEffect).
  */
 fun evaluateSwingRegion(): TransitionTable {
     val machine = SwingMachine()
@@ -146,6 +153,7 @@ fun evaluateSwingRegion(): TransitionTable {
         stateLabel = { it.label() },
         eventLabel = { it.label() },
         step = { s, e -> machine.step(s, e) },
+        effectLabel = { it.exportLabel() },
     )
 }
 
@@ -154,8 +162,8 @@ fun evaluateSwingRegion(): TransitionTable {
  *
  * Uses shipped [dispatchWithDelegation] / [ConnState.onEvent] for next-state on a
  * probe context ([applyInitialEntry]=false so init never calls the interpreter),
- * then pure [declaredEffects] (planTransition / same-leaf / LogRefusal).
- * Never calls handle or EffectInterpreter.
+ * then pure [declaredEffects] (planTransition / same-leaf / refusal audit).
+ * Never calls handle or [interpretConnection].
  */
 fun evaluateConnectionHierarchy(): TransitionTable {
     val leaves = listOf(Offline, Idle, Transferring)
@@ -177,14 +185,14 @@ fun evaluateConnectionHierarchy(): TransitionTable {
                     event = event.label(),
                     to = result.next.name,
                     kind = TransitionKind.ACCEPTED,
-                    effects = effectShortNames(effects),
+                    effects = effectShortNames(effects) { it.exportLabel() },
                 )
                 HandleResult.Unhandled -> rows += TransitionRow(
                     from = leaf.name,
                     event = event.label(),
                     to = leaf.name,
                     kind = TransitionKind.REFUSED,
-                    effects = effectShortNames(effects),
+                    effects = effectShortNames(effects) { it.exportLabel() },
                     note = "no state in hierarchy accepted event",
                 )
             }
@@ -197,7 +205,7 @@ fun evaluateConnectionHierarchy(): TransitionTable {
  * PURPOSE: Probe hierarchical dispatch without interpreter side effects.
  *
  * Builds a [ConnectionContext] with applyInitialEntry=false and log=null so
- * construction and onEvent never call [fsm.sample.effect.EffectInterpreter].
+ * construction and onEvent never call [interpretConnection].
  * Uses shipped [dispatchWithDelegation] (same walk as handle).
  */
 fun probeConnection(from: ConnState, event: ConnEvent): HandleResult {

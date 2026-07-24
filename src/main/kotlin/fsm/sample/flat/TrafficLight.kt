@@ -1,7 +1,5 @@
 package fsm.sample.flat
 
-import fsm.sample.effect.Effect
-import fsm.sample.effect.EffectInterpreter
 import fsm.sample.effect.StepResult
 import fsm.sample.logging.TransitionLog
 
@@ -11,12 +9,13 @@ import fsm.sample.logging.TransitionLog
  * Discipline demonstrated:
  * - Sealed/closed state and event hierarchies (finite, compile-time known set)
  * - Pure transition of the form State + Event → State
- * - Pure step of the form State + Event → StepResult(next, effects)
+ * - Pure step of the form State + Event → StepResult(next, [LightEffect]s)
  * - Exhaustive `when` so missing handlers are rejected without an `else`
- * - Boundary assigns state and interprets declared effects (logging)
+ * - Boundary assigns state and runs [interpretLight] (cross-cutting audit only)
  *
  * Domain vignette: a simple traffic light cycle. Flat (non-hierarchical) FSM
- * only — hierarchy is shown in the GoF/hierarchical package.
+ * only — hierarchy is shown in the GoF/hierarchical package. Light has **no**
+ * domain-only effects (contrast Connection [IncHeartbeat]).
  */
 
 /** Closed set of traffic-light modes. Sealed = no external subclasses. */
@@ -67,21 +66,21 @@ fun transition(state: LightState, event: LightEvent): LightState = when (event) 
 }
 
 /**
- * PURPOSE: Pure step that declares next state + effects without running them.
+ * PURPOSE: Pure step that declares next state + [LightEffect]s without running them.
  *
- * Uses [transition] for successor math; wraps a [Effect.LogTransition] so
+ * Uses [transition] for successor math; wraps a light transition audit so
  * tests can assert the effect list without a log or I/O.
  */
 fun step(
     state: LightState,
     event: LightEvent,
     machineName: String = "TrafficLight",
-): StepResult<LightState> {
+): StepResult<LightState, LightEffect> {
     val next = transition(state, event)
     return StepResult(
         next = next,
         effects = listOf(
-            Effect.LogTransition(
+            lightTransition(
                 machine = machineName,
                 from = state.label(),
                 event = event.label(),
@@ -95,7 +94,7 @@ fun step(
  * PURPOSE: Thin mutable holder that applies pure [step] and interprets effects.
  *
  * Separates pure step math from the single side-effect boundary
- * (assign current + [EffectInterpreter]). Not a reusable "engine" — just a
+ * (assign current + [interpretLight]). Not a reusable "engine" — just a
  * context that owns current state for demo/test convenience.
  */
 class TrafficLight(
@@ -113,7 +112,7 @@ class TrafficLight(
     fun handle(event: LightEvent): LightState {
         val result = step(current, event, machineName)
         current = result.next
-        EffectInterpreter.apply(result.effects, log)
+        interpretLight(result.effects, log)
         return current
     }
 }

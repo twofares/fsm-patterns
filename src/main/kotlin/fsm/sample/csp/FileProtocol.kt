@@ -1,7 +1,5 @@
 package fsm.sample.csp
 
-import fsm.sample.effect.Effect
-import fsm.sample.effect.EffectInterpreter
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -12,10 +10,10 @@ import fsm.sample.logging.TransitionLog
  * The portable encoding used here:
  * - Explicit event alphabet for the whole process
  * - Per-state "menu" (acceptance set): only events in the menu are offered
- * - Refusal of non-menu events (declared as [Effect.LogRefusal], state unchanged)
+ * - Refusal of non-menu events (declared as [FileEffect] audit refusal, state unchanged)
  * - Prefix / choice encoded as pure State + Event → State when accepted
- * - Pure [stepOffer] returns sealed [OfferStep] (control outcome + effects);
- *   boundary [offer] assigns + interprets without scanning log vocabulary
+ * - Pure [stepOffer] returns sealed [OfferStep] (control outcome + [FileEffect]s);
+ *   boundary [offer] assigns + [interpretFile] without scanning log vocabulary
  *
  * Domain vignette: a tiny file protocol process
  *   Closed --Open--> Opened --Read--> Opened --Close--> Closed
@@ -58,23 +56,23 @@ sealed class OfferResult {
 /**
  * PURPOSE: Pure CSP offer step outcome — control flow separate from log effects.
  *
- * [Accepted] / [Refused] arms carry [effects] for the boundary; [next] is always
+ * [Accepted] / [Refused] arms carry [FileEffect]s for the boundary; [next] is always
  * defined (refusal keeps prior state). Logging vocabulary stays observational
  * and is not used to classify accept vs refuse at the boundary.
  */
 sealed class OfferStep {
     abstract val next: FileState
-    abstract val effects: List<Effect>
+    abstract val effects: List<FileEffect>
 
     data class Accepted(
         override val next: FileState,
-        override val effects: List<Effect>,
+        override val effects: List<FileEffect>,
     ) : OfferStep()
 
     data class Refused(
         val reason: String,
         override val next: FileState,
-        override val effects: List<Effect>,
+        override val effects: List<FileEffect>,
     ) : OfferStep()
 }
 
@@ -83,8 +81,8 @@ sealed class OfferStep {
  *
  * [alphabet] is the process-wide event set.
  * [menu] is the currently offered events (state-dependent acceptance).
- * [stepOffer] is pure: sealed [OfferStep] with next + effects.
- * [offer] is the boundary: assign state + interpret effects.
+ * [stepOffer] is pure: sealed [OfferStep] with next + [FileEffect]s.
+ * [offer] is the boundary: assign state + [interpretFile].
  */
 class FileProtocol(
     initial: FileState = FileState.Closed,
@@ -130,7 +128,7 @@ class FileProtocol(
     }
 
     /**
-     * PURPOSE: Pure CSP offer step — sealed control outcome + declared effects.
+     * PURPOSE: Pure CSP offer step — sealed control outcome + declared [FileEffect]s.
      * Does not mutate [current] or touch the log; tests assert [OfferStep.effects].
      */
     fun stepOffer(
@@ -143,7 +141,7 @@ class FileProtocol(
                 reason = reason,
                 next = state,
                 effects = listOf(
-                    Effect.LogRefusal(machineName, state.label(), event.label(), reason),
+                    fileRefusal(machineName, state.label(), event.label(), reason),
                 ),
             )
         }
@@ -155,7 +153,7 @@ class FileProtocol(
                 reason = reason,
                 next = state,
                 effects = listOf(
-                    Effect.LogRefusal(machineName, state.label(), event.label(), reason),
+                    fileRefusal(machineName, state.label(), event.label(), reason),
                 ),
             )
         }
@@ -163,7 +161,7 @@ class FileProtocol(
         return OfferStep.Accepted(
             next = next,
             effects = listOf(
-                Effect.LogTransition(
+                fileTransition(
                     machine = machineName,
                     from = state.label(),
                     event = event.label(),
@@ -180,7 +178,7 @@ class FileProtocol(
     fun offer(event: FileEvent): OfferResult {
         val result = stepOffer(current, event)
         current = result.next
-        EffectInterpreter.apply(result.effects, log)
+        interpretFile(result.effects, log)
         return when (result) {
             is OfferStep.Accepted -> OfferResult.Accepted(result.next)
             is OfferStep.Refused -> OfferResult.Refused(result.reason)

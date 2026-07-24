@@ -22,15 +22,28 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 
 | Path | Discipline |
 |------|------------|
-| `src/main/kotlin/fsm/sample/flat/` | Sealed states/events, pure `State+Event→State` / `StepResult`, exhaustive `when` |
-| `src/main/kotlin/fsm/sample/gof/` | GoF State, hierarchical parent delegation, entry/exit/heartbeat as effects |
-| `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal Component composition + effect-declared logging |
-| `src/main/kotlin/fsm/sample/csp/` | Explicit alphabet, menus, refusal of non-menu events |
-| `src/main/kotlin/fsm/sample/effect/` | Sealed `Effect` + pure `StepResult` + thin `EffectInterpreter` boundary |
+| `src/main/kotlin/fsm/sample/flat/` | Sealed states/events, pure `StepResult<S, LightEffect>`, `interpretLight` |
+| `src/main/kotlin/fsm/sample/gof/` | GoF State, hierarchy, `ConnectionEffect` (audit + **domain** `IncHeartbeat`) |
+| `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal regions: `LatchEffect` / `SwingEffect` / `DoorEffect` |
+| `src/main/kotlin/fsm/sample/csp/` | CSP alphabet/menus, `FileEffect` accept/refuse audit |
+| `src/main/kotlin/fsm/sample/effect/` | Generic `StepResult<S, E>`, **cross-cutting** `AuditEffect` + `AuditInterpreter` |
 | `src/main/kotlin/fsm/sample/logging/` | Consistent transition/entry/exit/refusal log |
-| `src/main/kotlin/fsm/sample/export/` | Stdlib product evaluation → Markdown tables (next-state + declared effects) + Mermaid |
+| `src/main/kotlin/fsm/sample/export/` | Stdlib product evaluation → Markdown tables + Mermaid |
 | `src/main/kotlin/fsm/sample/DemoMain.kt` | Fixed demo script exercising all patterns |
 | `src/main/kotlin/fsm/sample/ExportMain.kt` | Launch path for generated tables/diagrams |
+
+## Domain-specific vs cross-cutting effects
+
+There is **no global kitchen-sink `Effect` ADT**. Each behavior owns a sealed
+effect type and a local interpreter; pure steps return `StepResult<S, Efx>`.
+
+| Kind | What | Where |
+|------|------|--------|
+| **Cross-cutting** | Transition / entry / exit / refusal **audit** → same `TransitionLog` format | Shared `AuditEffect` + `AuditInterpreter`; each machine wraps audit in its ADT |
+| **Domain-specific** | Connection-only heartbeat counter | `ConnectionEffect.IncHeartbeat` only (not on Light/File/Door ADTs) |
+
+Type system separation: `List<LightEffect>` cannot hold `ConnectionEffect.IncHeartbeat`.
+Export product evaluation reads pure effect **labels** only (no interpreters).
 
 ## Export tables and effects
 
@@ -39,14 +52,14 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 
 | Machine | Pure API used for rows |
 |---------|------------------------|
-| TrafficLight | `step(s, e)` → next + effects |
-| FileProtocol | `stepOffer(s, e)` → accept/refuse + effects |
-| Latch / Swing | `step(s, e)` → next + effects |
-| Connection | probe `onEvent` + `planTransition` (or same-leaf handler effects) |
+| TrafficLight | `step(s, e)` → next + `LightEffect` |
+| FileProtocol | `stepOffer(s, e)` → accept/refuse + `FileEffect` |
+| Latch / Swing | `step(s, e)` → next + region effects |
+| Connection | probe `onEvent` + `planTransition` / `declaredEffects` |
 
 Markdown tables include an **Effects** column (comma-joined short names such as
 `LogTransition`, `LogRefusal`, `IncHeartbeat`, `LogEntry(Idle)`). Export never
-calls `handle` / `offer` / `EffectInterpreter` — so logs and counters are not
+calls `handle` / `offer` / per-machine interpreters — so logs and counters are not
 mutated while generating documentation. Mermaid diagrams remain **event-labeled**
 edges only; declared effects appear only in the Markdown tables.
 

@@ -1,7 +1,5 @@
 package fsm.sample.orthogonal
 
-import fsm.sample.effect.Effect
-import fsm.sample.effect.EffectInterpreter
 import fsm.sample.effect.StepResult
 import fsm.sample.logging.TransitionLog
 
@@ -19,9 +17,10 @@ import fsm.sample.logging.TransitionLog
  *   Region B (SwingMachine):  Closed ↔ Open
  *
  * Container [DoorSystem] dispatches external events to the appropriate component(s).
- * Component steps declare [Effect.LogTransition]; container guards declare
- * [Effect.LogRefusal] via pure [guardRefusalEffects]. Same effect list vocabulary
- * as flat/CSP/GoF — no product rewrite.
+ * Component steps declare [LatchEffect]/[SwingEffect] transition audits; container
+ * guards declare [DoorEffect] refusals via pure [guardRefusalEffects]. Cross-cutting
+ * audit format is shared ([AuditInterpreter] → [TransitionLog]); effect ADTs stay
+ * per-region so domain types do not leak across machines.
  */
 
 // --- Region A: Latch ---------------------------------------------------------
@@ -43,7 +42,7 @@ sealed class LatchEvent {
 
 /**
  * PURPOSE: Independent component machine for the latch region.
- * Pure transition + pure step with LogTransition effect; boundary interprets.
+ * Pure transition + pure step with [LatchEffect] transition audit; boundary interprets.
  * Kept separate so the orthogonal container composes objects, not product states.
  */
 class LatchMachine(
@@ -60,18 +59,18 @@ class LatchMachine(
     }
 
     /**
-     * PURPOSE: Pure step for the latch region (next + LogTransition effect).
+     * PURPOSE: Pure step for the latch region (next + transition audit).
      * Export product tables call [step] so Effects columns match pure declarations.
      */
     fun step(
         state: LatchState,
         event: LatchEvent,
-    ): StepResult<LatchState> {
+    ): StepResult<LatchState, LatchEffect> {
         val next = pureTransition(state, event)
         return StepResult(
             next = next,
             effects = listOf(
-                Effect.LogTransition(
+                latchTransition(
                     machine = machineName,
                     from = state.label(),
                     event = event.label(),
@@ -84,7 +83,7 @@ class LatchMachine(
     fun handle(event: LatchEvent): LatchState {
         val result = step(current, event)
         current = result.next
-        EffectInterpreter.apply(result.effects, log)
+        interpretLatch(result.effects, log)
         return current
     }
 }
@@ -124,16 +123,16 @@ class SwingMachine(
         SwingEvent.CloseDoor -> SwingState.Closed
     }
 
-    /** PURPOSE: Pure step for the swing region (next + LogTransition effect). */
+    /** PURPOSE: Pure step for the swing region (next + transition audit). */
     fun step(
         state: SwingState,
         event: SwingEvent,
-    ): StepResult<SwingState> {
+    ): StepResult<SwingState, SwingEffect> {
         val next = pureTransition(state, event)
         return StepResult(
             next = next,
             effects = listOf(
-                Effect.LogTransition(
+                swingTransition(
                     machine = machineName,
                     from = state.label(),
                     event = event.label(),
@@ -146,7 +145,7 @@ class SwingMachine(
     fun handle(event: SwingEvent): SwingState {
         val result = step(current, event)
         current = result.next
-        EffectInterpreter.apply(result.effects, log)
+        interpretSwing(result.effects, log)
         return current
     }
 }
@@ -189,7 +188,7 @@ class DoorSystem(
         "latch=${latch.current.label()}, swing=${swing.current.label()}"
 
     /**
-     * PURPOSE: Pure container guard — returns LogRefusal effects when policy
+     * PURPOSE: Pure container guard — returns [DoorEffect] refusals when policy
      * blocks [event], empty list when the event may be dispatched to a region.
      * Does not mutate state or log; tests assert the list without the boundary.
      */
@@ -198,11 +197,11 @@ class DoorSystem(
         latchState: LatchState = latch.current,
         swingState: SwingState = swing.current,
         config: String = "latch=${latchState.label()}, swing=${swingState.label()}",
-    ): List<Effect> = when (event) {
+    ): List<DoorEffect> = when (event) {
         DoorEvent.Open ->
             if (latchState is LatchState.Locked) {
                 listOf(
-                    Effect.LogRefusal(
+                    doorRefusal(
                         machine = machineName,
                         state = config,
                         event = event.label(),
@@ -215,7 +214,7 @@ class DoorSystem(
         DoorEvent.Lock ->
             if (swingState is SwingState.Open) {
                 listOf(
-                    Effect.LogRefusal(
+                    doorRefusal(
                         machine = machineName,
                         state = config,
                         event = event.label(),
@@ -235,7 +234,7 @@ class DoorSystem(
     fun handle(event: DoorEvent): Boolean {
         val refusal = guardRefusalEffects(event)
         if (refusal.isNotEmpty()) {
-            EffectInterpreter.apply(refusal, log)
+            interpretDoor(refusal, log)
             return false
         }
         return when (event) {

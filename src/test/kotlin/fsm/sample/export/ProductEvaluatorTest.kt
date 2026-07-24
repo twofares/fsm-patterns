@@ -4,18 +4,23 @@ import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.OfferStep
-import fsm.sample.effect.Effect
+import fsm.sample.csp.exportLabel
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
+import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.flat.transition
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
+import fsm.sample.gof.ConnectionEffect
 import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Transferring
+import fsm.sample.gof.connRefusal
+import fsm.sample.gof.connTransition
 import fsm.sample.gof.declaredEffects
+import fsm.sample.gof.exportLabel
 import fsm.sample.gof.planTransition
 import fsm.sample.logging.RecordKind
 import fsm.sample.logging.TransitionLog
@@ -25,6 +30,7 @@ import fsm.sample.orthogonal.LatchState
 import fsm.sample.orthogonal.SwingEvent
 import fsm.sample.orthogonal.SwingMachine
 import fsm.sample.orthogonal.SwingState
+import fsm.sample.orthogonal.exportLabel
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -32,7 +38,7 @@ import org.junit.jupiter.api.Test
 /**
  * PURPOSE: Drive shipped product-evaluation APIs and assert rows match
  * evaluating the same pure step/offer/plan functions the generator calls.
- * Also asserts export does not mutate shared logs/counters via the interpreter.
+ * Also asserts export does not mutate shared logs/counters via interpreters.
  */
 class ProductEvaluatorTest {
 
@@ -61,7 +67,7 @@ class ProductEvaluatorTest {
                 val pure = step(s, e)
                 val row = table.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(pure.next.label(), row.to)
-                assertEquals(effectShortNames(pure.effects), row.effects)
+                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
                 assertTrue(row.effects.contains("LogTransition"), "row=$row")
             }
         }
@@ -97,7 +103,7 @@ class ProductEvaluatorTest {
                 val pure = protocol.stepOffer(s, e)
                 val row = table.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(pure.next.label(), row.to)
-                assertEquals(effectShortNames(pure.effects), row.effects)
+                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
                 when (pure) {
                     is OfferStep.Accepted -> {
                         assertEquals(TransitionKind.ACCEPTED, row.kind)
@@ -144,7 +150,7 @@ class ProductEvaluatorTest {
             for (e in listOf(LatchEvent.Lock, LatchEvent.Unlock)) {
                 val pure = latch.step(s, e)
                 val row = latchTable.rows.single { it.from == s.label() && it.event == e.label() }
-                assertEquals(effectShortNames(pure.effects), row.effects)
+                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
                 assertTrue(row.effects.contains("LogTransition"))
             }
         }
@@ -152,7 +158,7 @@ class ProductEvaluatorTest {
             for (e in listOf(SwingEvent.OpenDoor, SwingEvent.CloseDoor)) {
                 val pure = swing.step(s, e)
                 val row = swingTable.rows.single { it.from == s.label() && it.event == e.label() }
-                assertEquals(effectShortNames(pure.effects), row.effects)
+                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
             }
         }
     }
@@ -160,7 +166,7 @@ class ProductEvaluatorTest {
     @Test
     fun `connection probe matches hierarchical handle outcomes for key edges`() {
         val table = evaluateConnectionHierarchy()
-        // Connect from Offline → Idle (shipped Offline handler)
+        // Connect from Offline → Idle (shipped offline handler)
         val connect = table.rows.single { it.from == Offline.name && it.event == ConnEvent.Connect.label() }
         assertEquals(Idle.name, connect.to)
         assertEquals(TransitionKind.ACCEPTED, connect.kind)
@@ -194,17 +200,17 @@ class ProductEvaluatorTest {
             ConnEvent.FinishTransfer,
             ConnEvent.Heartbeat,
         )
-        // Independent oracle: pure planTransition / same-leaf / LogRefusal lists —
+        // Independent oracle: pure planTransition / same-leaf / refusal lists —
         // not the export helper wiring alone.
         for (leaf in leaves) {
             for (event in events) {
                 val probe = probeConnection(leaf, event)
-                val expected = when (probe) {
+                val expected: List<ConnectionEffect> = when (probe) {
                     is HandleResult.Handled ->
                         if (probe.next !== leaf) {
                             planTransition(leaf, probe.next, event, probe.effects)
                         } else {
-                            probe.effects + Effect.LogTransition(
+                            probe.effects + connTransition(
                                 machine = "Connection",
                                 from = leaf.name,
                                 event = event.label(),
@@ -212,7 +218,7 @@ class ProductEvaluatorTest {
                             )
                         }
                     HandleResult.Unhandled -> listOf(
-                        Effect.LogRefusal(
+                        connRefusal(
                             machine = "Connection",
                             state = leaf.name,
                             event = event.label(),
@@ -222,7 +228,7 @@ class ProductEvaluatorTest {
                 }
                 val row = table.rows.single { it.from == leaf.name && it.event == event.label() }
                 assertEquals(
-                    effectShortNames(expected),
+                    effectShortNames(expected) { it.exportLabel() },
                     row.effects,
                     "leaf=${leaf.name} event=${event.label()}",
                 )
@@ -256,7 +262,7 @@ class ProductEvaluatorTest {
             disc.effects,
         )
 
-        // Heartbeat same-leaf at Idle: IncHeartbeat + LogTransition
+        // Heartbeat same-leaf at Idle: IncHeartbeat + LogTransition (domain + cross-cutting)
         val hb = table.rows.single { it.from == Idle.name && it.event == ConnEvent.Heartbeat.label() }
         assertEquals(listOf("IncHeartbeat", "LogTransition"), hb.effects)
 
