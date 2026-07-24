@@ -74,7 +74,7 @@ class MermaidExportTest {
         assertTrue(doc.contains("FileProtocol"))
         assertTrue(doc.contains("Connection"))
         assertTrue(doc.contains("DoorSystem"))
-        assertTrue(doc.contains("| From | Event | To | Kind | Note |"))
+        assertTrue(doc.contains("| From | Event | To | Kind | Effects | Note |"))
         assertTrue(doc.contains("```mermaid"))
         assertTrue(doc.contains("stateDiagram-v2"))
         // hierarchical + concurrent markers in one document

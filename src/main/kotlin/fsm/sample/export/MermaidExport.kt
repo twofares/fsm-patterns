@@ -8,12 +8,16 @@ package fsm.sample.export
  * - Concurrent regions separated by `--` for orthogonal components
  * - Edges from product-evaluated [TransitionRow] (accepted only by default)
  *
+ * Edge labels are **event names only**. Declared effects live in Markdown tables
+ * ([formatMarkdownTable]), not on Mermaid arrows — keeps hierarchy/concurrency
+ * diagrams readable.
+ *
  * Stdlib string building only — no Mermaid library dependency.
  */
 
 /**
- * PURPOSE: Flat Mermaid from a transition table (all ACCEPTED edges as labeled arrows).
- * REFUSED rows omitted from the graph (listed only in tables).
+ * PURPOSE: Flat Mermaid from a transition table (all ACCEPTED edges as event-labeled arrows).
+ * REFUSED rows and effect lists omitted from the graph (listed only in tables).
  */
 fun formatMermaidFlat(table: TransitionTable, diagramTitle: String = table.machine): String {
     val sb = StringBuilder()

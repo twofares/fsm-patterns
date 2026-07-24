@@ -22,8 +22,9 @@ import fsm.sample.logging.TransitionLog
  *
  * Events unhandled in Idle/Transferring may still be handled by Online.
  *
- * Export product evaluation probes [onEvent] for next-state only; effects are
- * a runtime-boundary concern (not added to export tables).
+ * Export product evaluation uses pure [planTransition] / [declaredEffects] and
+ * probe contexts with [applyInitialEntry]=false so [EffectInterpreter] is never
+ * invoked during documentation generation.
  */
 
 /** Closed event alphabet for the connection machine. */
@@ -42,7 +43,7 @@ sealed class ConnEvent {
  * PURPOSE: Result of handling an event in a state object.
  * - [Handled] carries the next leaf state and any effects declared by the handler
  *   (e.g. [Effect.IncHeartbeat]); entry/exit/transition effects are assembled
- *   by the context boundary when replacing state.
+ *   via pure [declaredEffects] / [planTransition] before the boundary applies them.
  * - [Unhandled] means "delegate to parent" (hierarchical discipline).
  */
 sealed class HandleResult {
@@ -135,27 +136,152 @@ data object Transferring : ConnState() {
     }
 }
 
+// --- Pure hierarchy / effect assembly (shared by handle + export) ------------
+
+/**
+ * PURPOSE: Build root → leaf path for hierarchical entry/exit ordering.
+ * Pure; no context or interpreter.
+ */
+fun pathFromRoot(leaf: ConnState): List<ConnState> {
+    val chain = mutableListOf<ConnState>()
+    var n: ConnState? = leaf
+    while (n != null) {
+        chain.add(0, n)
+        n = n.parent
+    }
+    return chain
+}
+
+/** PURPOSE: Length of shared superstate prefix (LCA index into root→leaf paths). */
+fun commonPrefixLength(a: List<ConnState>, b: List<ConnState>): Int {
+    val n = minOf(a.size, b.size)
+    var i = 0
+    while (i < n && a[i] === b[i]) i++
+    return i
+}
+
+/**
+ * PURPOSE: Pure assembly of hierarchical transition effects (LCA discipline).
+ *
+ * Order (UML-style): exit (innermost→outermost, exclusive of LCA) →
+ * [Effect.LogTransition] → [handlerEffects] (transition actions) →
+ * enter (outermost→innermost, exclusive of LCA).
+ *
+ * No [ConnectionContext], assign, or [EffectInterpreter] — safe for export and tests.
+ */
+fun planTransition(
+    from: ConnState,
+    to: ConnState,
+    event: ConnEvent,
+    handlerEffects: List<Effect> = emptyList(),
+    machineName: String = "Connection",
+): List<Effect> {
+    val fromPath = pathFromRoot(from)
+    val toPath = pathFromRoot(to)
+    val lcaIndex = commonPrefixLength(fromPath, toPath)
+    val effects = mutableListOf<Effect>()
+
+    // Exit states exclusive of LCA, from leaf toward root.
+    for (i in fromPath.lastIndex downTo lcaIndex) {
+        effects += fromPath[i].exitEffects(machineName)
+    }
+
+    effects += Effect.LogTransition(
+        machine = machineName,
+        from = from.name,
+        event = event.label(),
+        to = to.name,
+    )
+
+    // Handler / transition-action effects between exit and enter.
+    effects += handlerEffects
+
+    // Enter states exclusive of LCA, from root toward leaf.
+    for (i in lcaIndex until toPath.size) {
+        effects += toPath[i].enterEffects(machineName)
+    }
+
+    return effects
+}
+
+/**
+ * PURPOSE: Pure effect list for a hierarchical (from, event, HandleResult) triple.
+ *
+ * Shared by [ConnectionContext.handle] and export product evaluation so assembly
+ * cannot drift:
+ * - real transition → [planTransition]
+ * - same-leaf handled → handler effects + LogTransition
+ * - unhandled → LogRefusal
+ *
+ * Does not assign state or call [EffectInterpreter].
+ */
+fun declaredEffects(
+    from: ConnState,
+    event: ConnEvent,
+    result: HandleResult,
+    machineName: String = "Connection",
+): List<Effect> = when (result) {
+    is HandleResult.Handled -> {
+        val next = result.next
+        if (next !== from) {
+            planTransition(from, next, event, result.effects, machineName)
+        } else {
+            result.effects + Effect.LogTransition(
+                machine = machineName,
+                from = from.name,
+                event = event.label(),
+                to = next.name,
+            )
+        }
+    }
+    HandleResult.Unhandled -> listOf(
+        Effect.LogRefusal(
+            machine = machineName,
+            state = from.name,
+            event = event.label(),
+            reason = "no state in hierarchy accepted event",
+        ),
+    )
+}
+
+/**
+ * PURPOSE: Hierarchical event dispatch — walk leaf → parent until handled.
+ * Pure control flow over shipped [ConnState.onEvent]; no effect application.
+ */
+fun dispatchWithDelegation(
+    ctx: ConnectionContext,
+    start: ConnState,
+    event: ConnEvent,
+): HandleResult {
+    var node: ConnState? = start
+    while (node != null) {
+        when (val r = node.onEvent(ctx, event)) {
+            is HandleResult.Handled -> return r
+            HandleResult.Unhandled -> node = node.parent
+        }
+    }
+    return HandleResult.Unhandled
+}
+
 /**
  * PURPOSE: GoF context — owns the current state object and performs transitions
  * by replacing it, with proper exit/enter chain for hierarchy.
  *
  * Transition algorithm (ordinary code, not an engine):
  * 1. Try current leaf; if Unhandled, walk parent chain until Handled or root.
- * 2. If still Unhandled, refuse (declare LogRefusal effect) and keep state.
- * 3. If Handled with a different next state:
- *    - Assemble effects via [planTransition]: exit (while still in old leaf) →
- *      LogTransition → handler effects → enter (UML-style placement).
- *    - [EffectInterpreter.apply] while [current] is still the old leaf
- *      ("exit while still in old state").
- *    - Assign [current] = next only after effects are applied.
- * 4. Same-leaf Handled (e.g. Heartbeat): handler effects + LogTransition, then apply
- *    (no state assignment). Same-leaf is the intended home for handler-only effects
- *    such as [Effect.IncHeartbeat]; state-changing handlers use [planTransition].
+ * 2. Assemble pure [declaredEffects] from the probe result.
+ * 3. [EffectInterpreter.apply] while [current] is still the old leaf when needed
+ *    ("exit while still in old state"), then assign [current] if the leaf changed.
+ *
+ * [applyInitialEntry]: when true (default), init enters the initial ancestry via
+ * the interpreter. Export/product probes pass false so construction never calls
+ * [EffectInterpreter].
  */
 class ConnectionContext(
     initial: ConnState = Offline,
     val log: TransitionLog? = null,
     val machineName: String = "Connection",
+    applyInitialEntry: Boolean = true,
 ) {
     var current: ConnState = initial
         private set
@@ -168,9 +294,11 @@ class ConnectionContext(
         private set
 
     init {
-        // Enter the full ancestry of the initial state outermost → innermost.
-        val effects = pathFromRoot(initial).flatMap { it.enterEffects(machineName) }
-        applyEffects(effects)
+        if (applyInitialEntry) {
+            // Enter the full ancestry of the initial state outermost → innermost.
+            val effects = pathFromRoot(initial).flatMap { it.enterEffects(machineName) }
+            applyEffects(effects)
+        }
     }
 
     /**
@@ -179,37 +307,18 @@ class ConnectionContext(
      */
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
-        val result = dispatchWithDelegation(fromLeaf, event)
+        val result = dispatchWithDelegation(this, fromLeaf, event)
+        val effects = declaredEffects(fromLeaf, event, result, machineName)
         return when (result) {
             is HandleResult.Unhandled -> {
-                applyEffects(
-                    listOf(
-                        Effect.LogRefusal(
-                            machine = machineName,
-                            state = fromLeaf.name,
-                            event = event.label(),
-                            reason = "no state in hierarchy accepted event",
-                        ),
-                    ),
-                )
+                applyEffects(effects)
                 false
             }
             is HandleResult.Handled -> {
-                val next = result.next
-                if (next !== fromLeaf) {
-                    // Real transition: apply exit/transition/enter while still in fromLeaf.
-                    val effects = planTransition(fromLeaf, next, event, result.effects)
-                    applyEffects(effects)
-                    current = next
-                } else {
-                    // Same leaf (e.g. Heartbeat): handler effects + observability.
-                    val effects = result.effects + Effect.LogTransition(
-                        machine = machineName,
-                        from = fromLeaf.name,
-                        event = event.label(),
-                        to = next.name,
-                    )
-                    applyEffects(effects)
+                // Apply while still in fromLeaf; assign only after for real transitions.
+                applyEffects(effects)
+                if (result.next !== fromLeaf) {
+                    current = result.next
                 }
                 true
             }
@@ -217,85 +326,19 @@ class ConnectionContext(
     }
 
     /**
-     * PURPOSE: Hierarchical event dispatch — walk leaf → parent until handled.
-     * This is the "behavioral inheritance" core without a statechart runtime.
-     */
-    private fun dispatchWithDelegation(start: ConnState, event: ConnEvent): HandleResult {
-        var node: ConnState? = start
-        while (node != null) {
-            when (val r = node.onEvent(this, event)) {
-                is HandleResult.Handled -> return r
-                HandleResult.Unhandled -> node = node.parent
-            }
-        }
-        return HandleResult.Unhandled
-    }
-
-    /**
-     * PURPOSE: Pure assembly of hierarchical transition effects (LCA discipline).
-     *
-     * Order (UML-style): exit (innermost→outermost, exclusive of LCA) →
-     * [Effect.LogTransition] → [handlerEffects] (transition actions) →
-     * enter (outermost→innermost, exclusive of LCA).
-     *
-     * Does not assign [current] or apply effects — safe for tests to inspect
-     * full Offline→Idle lists without going through the applying boundary.
+     * PURPOSE: Instance facade over pure top-level [planTransition] (machineName bound).
+     * Kept so tests can call `ctx.planTransition(...)` without re-stating the name.
      */
     fun planTransition(
         from: ConnState,
         to: ConnState,
         event: ConnEvent,
         handlerEffects: List<Effect> = emptyList(),
-    ): List<Effect> {
-        val fromPath = pathFromRoot(from)
-        val toPath = pathFromRoot(to)
-        val lcaIndex = commonPrefixLength(fromPath, toPath)
-        val effects = mutableListOf<Effect>()
-
-        // Exit states exclusive of LCA, from leaf toward root.
-        for (i in fromPath.lastIndex downTo lcaIndex) {
-            effects += fromPath[i].exitEffects(machineName)
-        }
-
-        effects += Effect.LogTransition(
-            machine = machineName,
-            from = from.name,
-            event = event.label(),
-            to = to.name,
-        )
-
-        // Handler / transition-action effects between exit and enter.
-        effects += handlerEffects
-
-        // Enter states exclusive of LCA, from root toward leaf.
-        for (i in lcaIndex until toPath.size) {
-            effects += toPath[i].enterEffects(machineName)
-        }
-
-        return effects
-    }
+    ): List<Effect> = fsm.sample.gof.planTransition(from, to, event, handlerEffects, machineName)
 
     private fun applyEffects(effects: List<Effect>) {
         EffectInterpreter.apply(effects, log) {
             heartbeatCount += 1
         }
-    }
-
-    /** Build root → leaf path for hierarchical entry/exit ordering. */
-    private fun pathFromRoot(leaf: ConnState): List<ConnState> {
-        val chain = mutableListOf<ConnState>()
-        var n: ConnState? = leaf
-        while (n != null) {
-            chain.add(0, n)
-            n = n.parent
-        }
-        return chain
-    }
-
-    private fun commonPrefixLength(a: List<ConnState>, b: List<ConnState>): Int {
-        val n = minOf(a.size, b.size)
-        var i = 0
-        while (i < n && a[i] === b[i]) i++
-        return i
     }
 }

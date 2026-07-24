@@ -113,7 +113,7 @@ class FileProtocol(
     /**
      * PURPOSE: Pure transition when [event] is in the current menu.
      * Exhaustive for accepted pairs; illegal pairs are never called from [stepOffer].
-     * Kept pure for export product evaluation (next-state-only tables).
+     * Kept pure for next-state math; export product tables prefer [stepOffer].
      */
     fun pureWhenAccepted(state: FileState, event: FileEvent): FileState = when (state) {
         FileState.Closed -> when (event) {

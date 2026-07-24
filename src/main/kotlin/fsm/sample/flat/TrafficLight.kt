@@ -55,7 +55,7 @@ sealed class LightEvent {
  * isolation. Exhaustive `when` on both sealed hierarchies is intentional:
  * adding a new state/event without updating this function fails compilation.
  *
- * Kept for export product evaluation (next-state-only tables).
+ * Kept for next-state math; export product tables prefer [step] (next + effects).
  */
 fun transition(state: LightState, event: LightEvent): LightState = when (event) {
     LightEvent.Tick -> when (state) {

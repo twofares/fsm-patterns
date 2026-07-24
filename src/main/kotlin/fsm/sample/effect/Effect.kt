@@ -9,8 +9,8 @@ package fsm.sample.effect
  * effect algebra, free monad, or reusable runtime — just ordinary sealed data
  * tests can assert without real I/O.
  *
- * Export product evaluation stays next-state-only (see export package PURPOSE):
- * effects are a runtime-boundary concern, not part of pure transition tables.
+ * Export product evaluation records declared effect *labels* from pure steps
+ * (see export package); the interpreter still runs only at machine boundaries.
  */
 sealed class Effect {
     /** Record a successful mode change (from --event--> to). */

@@ -3,8 +3,9 @@ package fsm.sample.export
 /**
  * PURPOSE: High-level export API for all sample machines in this project.
  *
- * Combines Method 1 (product evaluation of pure APIs) with Method 2
- * (structure-preserving hierarchy and orthogonality) into Markdown + Mermaid.
+ * Combines Method 1 (product evaluation of pure next-state + effect APIs) with
+ * Method 2 (structure-preserving hierarchy and orthogonality) into Markdown +
+ * Mermaid. Tables include an Effects column from pure step declarations.
  * Call sites: tests and [fsm.sample.ExportMain].
  */
 
@@ -96,6 +97,7 @@ fun exportAllDocument(): String {
     sb.appendLine("# Generated state transition tables and Mermaid diagrams")
     sb.appendLine()
     sb.appendLine("Product evaluation of shipped pure APIs + structure-preserving hierarchy/orthogonality.")
+    sb.appendLine("Tables include declared effects from pure steps (not interpreter side effects).")
     sb.appendLine("Stdlib only — no FSM/statechart engines.")
     sb.appendLine()
 

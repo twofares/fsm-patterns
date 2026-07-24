@@ -1,20 +1,21 @@
 # Generated state transition tables and Mermaid diagrams
 
 Product evaluation of shipped pure APIs + structure-preserving hierarchy/orthogonality.
+Tables include declared effects from pure steps (not interpreter side effects).
 Stdlib only — no FSM/statechart engines.
 
 ## TrafficLight
 
 ### TrafficLight transition table
 
-| From | Event | To | Kind | Note |
-| --- | --- | --- | --- | --- |
-| Red | Tick | Green | ACCEPTED |  |
-| Red | Emergency | Red | ACCEPTED |  |
-| Green | Tick | Yellow | ACCEPTED |  |
-| Green | Emergency | Red | ACCEPTED |  |
-| Yellow | Tick | Red | ACCEPTED |  |
-| Yellow | Emergency | Red | ACCEPTED |  |
+| From | Event | To | Kind | Effects | Note |
+| --- | --- | --- | --- | --- | --- |
+| Red | Tick | Green | ACCEPTED | LogTransition |  |
+| Red | Emergency | Red | ACCEPTED | LogTransition |  |
+| Green | Tick | Yellow | ACCEPTED | LogTransition |  |
+| Green | Emergency | Red | ACCEPTED | LogTransition |  |
+| Yellow | Tick | Red | ACCEPTED | LogTransition |  |
+| Yellow | Emergency | Red | ACCEPTED | LogTransition |  |
 
 ```mermaid
 stateDiagram-v2
@@ -34,14 +35,14 @@ stateDiagram-v2
 
 ### FileProtocol transition table
 
-| From | Event | To | Kind | Note |
-| --- | --- | --- | --- | --- |
-| Closed | Open | Opened | ACCEPTED |  |
-| Closed | Read | Closed | REFUSED | not in menu |
-| Closed | Close | Closed | REFUSED | not in menu |
-| Opened | Open | Opened | REFUSED | not in menu |
-| Opened | Read | Opened | ACCEPTED |  |
-| Opened | Close | Closed | ACCEPTED |  |
+| From | Event | To | Kind | Effects | Note |
+| --- | --- | --- | --- | --- | --- |
+| Closed | Open | Opened | ACCEPTED | LogTransition |  |
+| Closed | Read | Closed | REFUSED | LogRefusal | not in menu |
+| Closed | Close | Closed | REFUSED | LogRefusal | not in menu |
+| Opened | Open | Opened | REFUSED | LogRefusal | not in menu |
+| Opened | Read | Opened | ACCEPTED | LogTransition |  |
+| Opened | Close | Closed | ACCEPTED | LogTransition |  |
 
 ```mermaid
 stateDiagram-v2
@@ -57,23 +58,23 @@ stateDiagram-v2
 
 ### Connection transition table
 
-| From | Event | To | Kind | Note |
-| --- | --- | --- | --- | --- |
-| Offline | Connect | Idle | ACCEPTED |  |
-| Offline | Disconnect | Offline | REFUSED | no state in hierarchy accepted event |
-| Offline | StartTransfer | Offline | REFUSED | no state in hierarchy accepted event |
-| Offline | FinishTransfer | Offline | REFUSED | no state in hierarchy accepted event |
-| Offline | Heartbeat | Offline | REFUSED | no state in hierarchy accepted event |
-| Idle | Connect | Idle | REFUSED | no state in hierarchy accepted event |
-| Idle | Disconnect | Offline | ACCEPTED |  |
-| Idle | StartTransfer | Transferring | ACCEPTED |  |
-| Idle | FinishTransfer | Idle | REFUSED | no state in hierarchy accepted event |
-| Idle | Heartbeat | Idle | ACCEPTED |  |
-| Transferring | Connect | Transferring | REFUSED | no state in hierarchy accepted event |
-| Transferring | Disconnect | Offline | ACCEPTED |  |
-| Transferring | StartTransfer | Transferring | REFUSED | no state in hierarchy accepted event |
-| Transferring | FinishTransfer | Idle | ACCEPTED |  |
-| Transferring | Heartbeat | Transferring | ACCEPTED |  |
+| From | Event | To | Kind | Effects | Note |
+| --- | --- | --- | --- | --- | --- |
+| Offline | Connect | Idle | ACCEPTED | LogExit(Offline), LogTransition, LogEntry(Online), LogEntry(Idle) |  |
+| Offline | Disconnect | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Offline | StartTransfer | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Offline | FinishTransfer | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Offline | Heartbeat | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Idle | Connect | Idle | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Idle | Disconnect | Offline | ACCEPTED | LogExit(Idle), LogExit(Online), LogTransition, LogEntry(Offline) |  |
+| Idle | StartTransfer | Transferring | ACCEPTED | LogExit(Idle), LogTransition, LogEntry(Transferring) |  |
+| Idle | FinishTransfer | Idle | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Idle | Heartbeat | Idle | ACCEPTED | IncHeartbeat, LogTransition |  |
+| Transferring | Connect | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Transferring | Disconnect | Offline | ACCEPTED | LogExit(Transferring), LogExit(Online), LogTransition, LogEntry(Offline) |  |
+| Transferring | StartTransfer | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
+| Transferring | FinishTransfer | Idle | ACCEPTED | LogExit(Transferring), LogTransition, LogEntry(Idle) |  |
+| Transferring | Heartbeat | Transferring | ACCEPTED | IncHeartbeat, LogTransition |  |
 
 ```mermaid
 stateDiagram-v2
@@ -97,34 +98,34 @@ stateDiagram-v2
 
 ### DoorSystem transition table
 
-| From | Event | To | Kind | Note |
-| --- | --- | --- | --- | --- |
-| Locked | Lock | Locked | ACCEPTED | region=Latch |
-| Locked | Unlock | Unlocked | ACCEPTED | region=Latch |
-| Unlocked | Lock | Locked | ACCEPTED | region=Latch |
-| Unlocked | Unlock | Unlocked | ACCEPTED | region=Latch |
-| Closed | OpenDoor | Open | ACCEPTED | region=Swing |
-| Closed | CloseDoor | Closed | ACCEPTED | region=Swing |
-| Open | OpenDoor | Open | ACCEPTED | region=Swing |
-| Open | CloseDoor | Closed | ACCEPTED | region=Swing |
+| From | Event | To | Kind | Effects | Note |
+| --- | --- | --- | --- | --- | --- |
+| Locked | Lock | Locked | ACCEPTED | LogTransition | region=Latch |
+| Locked | Unlock | Unlocked | ACCEPTED | LogTransition | region=Latch |
+| Unlocked | Lock | Locked | ACCEPTED | LogTransition | region=Latch |
+| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition | region=Latch |
+| Closed | OpenDoor | Open | ACCEPTED | LogTransition | region=Swing |
+| Closed | CloseDoor | Closed | ACCEPTED | LogTransition | region=Swing |
+| Open | OpenDoor | Open | ACCEPTED | LogTransition | region=Swing |
+| Open | CloseDoor | Closed | ACCEPTED | LogTransition | region=Swing |
 
 ### Latch transition table
 
-| From | Event | To | Kind | Note |
-| --- | --- | --- | --- | --- |
-| Locked | Lock | Locked | ACCEPTED |  |
-| Locked | Unlock | Unlocked | ACCEPTED |  |
-| Unlocked | Lock | Locked | ACCEPTED |  |
-| Unlocked | Unlock | Unlocked | ACCEPTED |  |
+| From | Event | To | Kind | Effects | Note |
+| --- | --- | --- | --- | --- | --- |
+| Locked | Lock | Locked | ACCEPTED | LogTransition |  |
+| Locked | Unlock | Unlocked | ACCEPTED | LogTransition |  |
+| Unlocked | Lock | Locked | ACCEPTED | LogTransition |  |
+| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition |  |
 
 ### Swing transition table
 
-| From | Event | To | Kind | Note |
-| --- | --- | --- | --- | --- |
-| Closed | OpenDoor | Open | ACCEPTED |  |
-| Closed | CloseDoor | Closed | ACCEPTED |  |
-| Open | OpenDoor | Open | ACCEPTED |  |
-| Open | CloseDoor | Closed | ACCEPTED |  |
+| From | Event | To | Kind | Effects | Note |
+| --- | --- | --- | --- | --- | --- |
+| Closed | OpenDoor | Open | ACCEPTED | LogTransition |  |
+| Closed | CloseDoor | Closed | ACCEPTED | LogTransition |  |
+| Open | OpenDoor | Open | ACCEPTED | LogTransition |  |
+| Open | CloseDoor | Closed | ACCEPTED | LogTransition |  |
 
 ```mermaid
 stateDiagram-v2

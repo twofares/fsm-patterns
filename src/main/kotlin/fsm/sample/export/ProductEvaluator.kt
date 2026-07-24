@@ -3,9 +3,11 @@ package fsm.sample.export
 import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
+import fsm.sample.csp.OfferStep
+import fsm.sample.effect.StepResult
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
-import fsm.sample.flat.transition
+import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnState
 import fsm.sample.gof.ConnectionContext
@@ -14,6 +16,8 @@ import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Online
 import fsm.sample.gof.Transferring
+import fsm.sample.gof.declaredEffects
+import fsm.sample.gof.dispatchWithDelegation
 import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
@@ -23,21 +27,23 @@ import fsm.sample.orthogonal.SwingState
 
 /**
  * PURPOSE: Method 1 from research — exhaustive product evaluation of pure
- * State + Event → State APIs over finite sealed domains.
+ * State + Event → next + effects APIs over finite sealed domains.
  *
- * Enumerates every (state, event) pair, calls the **shipped** pure transition /
- * menu functions (never re-implements rules), and builds [TransitionTable] rows.
- * Stdlib-only: no reflection required; domains listed explicitly from sealed sets.
+ * Enumerates every (state, event) pair, calls the **shipped** pure step /
+ * offer / hierarchy functions (never re-implements rules), and builds
+ * [TransitionTable] rows including short effect labels. Stdlib-only: no
+ * reflection; domains listed explicitly from sealed sets.
  *
- * Effects ([fsm.sample.effect]) are intentionally omitted: export tables are
- * next-state-only so product eval stays pure and free of log/counter side effects.
+ * Never calls [fsm.sample.effect.EffectInterpreter], handle, or offer during
+ * export — only pure step / stepOffer / planTransition / declaredEffects, plus
+ * hierarchical onEvent probes on contexts with applyInitialEntry=false.
  */
 
 // --- Generic product helpers -------------------------------------------------
 
 /**
- * PURPOSE: Evaluate a total pure transition on the Cartesian product.
- * Every pair is ACCEPTED with successor = [transition](s, e).
+ * PURPOSE: Evaluate a total pure step on the Cartesian product.
+ * Every pair is ACCEPTED; [effects] come from [StepResult.effects].
  */
 fun <S, E> productEvaluateTotal(
     machine: String,
@@ -45,57 +51,19 @@ fun <S, E> productEvaluateTotal(
     events: List<E>,
     stateLabel: (S) -> String,
     eventLabel: (E) -> String,
-    transition: (S, E) -> S,
+    step: (S, E) -> StepResult<S>,
 ): TransitionTable {
     val rows = mutableListOf<TransitionRow>()
     for (s in states) {
         for (e in events) {
-            val next = transition(s, e)
+            val result = step(s, e)
             rows += TransitionRow(
                 from = stateLabel(s),
                 event = eventLabel(e),
-                to = stateLabel(next),
+                to = stateLabel(result.next),
                 kind = TransitionKind.ACCEPTED,
+                effects = effectShortNames(result.effects),
             )
-        }
-    }
-    return TransitionTable(machine, rows)
-}
-
-/**
- * PURPOSE: CSP-style product: in-menu → pure successor; out-of-menu → REFUSED self.
- * Calls [menu] and [whenAccepted] from the shipped process — no second oracle.
- */
-fun <S, E> productEvaluateWithMenu(
-    machine: String,
-    states: List<S>,
-    alphabet: List<E>,
-    stateLabel: (S) -> String,
-    eventLabel: (E) -> String,
-    menu: (S) -> Set<E>,
-    whenAccepted: (S, E) -> S,
-): TransitionTable {
-    val rows = mutableListOf<TransitionRow>()
-    for (s in states) {
-        val offered = menu(s)
-        for (e in alphabet) {
-            if (e in offered) {
-                val next = whenAccepted(s, e)
-                rows += TransitionRow(
-                    from = stateLabel(s),
-                    event = eventLabel(e),
-                    to = stateLabel(next),
-                    kind = TransitionKind.ACCEPTED,
-                )
-            } else {
-                rows += TransitionRow(
-                    from = stateLabel(s),
-                    event = eventLabel(e),
-                    to = stateLabel(s), // self-successor under refusal
-                    kind = TransitionKind.REFUSED,
-                    note = "not in menu",
-                )
-            }
         }
     }
     return TransitionTable(machine, rows)
@@ -104,8 +72,8 @@ fun <S, E> productEvaluateWithMenu(
 // --- Sample machines: product evaluation via shipped pure APIs ---------------
 
 /**
- * PURPOSE: Complete transition table for TrafficLight via [transition].
- * Domain: all LightState × all LightEvent.
+ * PURPOSE: Complete transition table for TrafficLight via pure [step].
+ * Domain: all LightState × all LightEvent; effects from StepResult.
  */
 fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
     machine = "TrafficLight",
@@ -113,29 +81,46 @@ fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
     events = listOf(LightEvent.Tick, LightEvent.Emergency),
     stateLabel = { it.label() },
     eventLabel = { it.label() },
-    transition = { s, e -> transition(s, e) },
+    step = { s, e -> step(s, e) },
 )
 
 /**
- * PURPOSE: Complete CSP table for FileProtocol via [FileProtocol.menu] and
- * [FileProtocol.pureWhenAccepted]. Non-menu alphabet events are REFUSED.
+ * PURPOSE: Complete CSP table for FileProtocol via pure [FileProtocol.stepOffer].
+ * Non-menu alphabet events are REFUSED with LogRefusal effects.
+ * No [FileProtocol.offer] / interpreter — pure product only.
  */
 fun evaluateFileProtocol(): TransitionTable {
     // Stateless probe instance: only pure methods are used.
     val protocol = FileProtocol()
-    return productEvaluateWithMenu(
-        machine = "FileProtocol",
-        states = listOf(FileState.Closed, FileState.Opened),
-        alphabet = listOf(FileEvent.Open, FileEvent.Read, FileEvent.Close),
-        stateLabel = { it.label() },
-        eventLabel = { it.label() },
-        menu = { s -> protocol.menu(s) },
-        whenAccepted = { s, e -> protocol.pureWhenAccepted(s, e) },
-    )
+    val states = listOf(FileState.Closed, FileState.Opened)
+    val alphabet = listOf(FileEvent.Open, FileEvent.Read, FileEvent.Close)
+    val rows = mutableListOf<TransitionRow>()
+    for (s in states) {
+        for (e in alphabet) {
+            when (val result = protocol.stepOffer(s, e)) {
+                is OfferStep.Accepted -> rows += TransitionRow(
+                    from = s.label(),
+                    event = e.label(),
+                    to = result.next.label(),
+                    kind = TransitionKind.ACCEPTED,
+                    effects = effectShortNames(result.effects),
+                )
+                is OfferStep.Refused -> rows += TransitionRow(
+                    from = s.label(),
+                    event = e.label(),
+                    to = result.next.label(),
+                    kind = TransitionKind.REFUSED,
+                    effects = effectShortNames(result.effects),
+                    note = "not in menu",
+                )
+            }
+        }
+    }
+    return TransitionTable("FileProtocol", rows)
 }
 
 /**
- * PURPOSE: Latch region pure product via [LatchMachine.pureTransition].
+ * PURPOSE: Latch region pure product via [LatchMachine.step] (next + effects).
  */
 fun evaluateLatchRegion(): TransitionTable {
     val machine = LatchMachine()
@@ -145,12 +130,12 @@ fun evaluateLatchRegion(): TransitionTable {
         events = listOf(LatchEvent.Lock, LatchEvent.Unlock),
         stateLabel = { it.label() },
         eventLabel = { it.label() },
-        transition = { s, e -> machine.pureTransition(s, e) },
+        step = { s, e -> machine.step(s, e) },
     )
 }
 
 /**
- * PURPOSE: Swing region pure product via [SwingMachine.pureTransition].
+ * PURPOSE: Swing region pure product via [SwingMachine.step] (next + effects).
  */
 fun evaluateSwingRegion(): TransitionTable {
     val machine = SwingMachine()
@@ -160,17 +145,17 @@ fun evaluateSwingRegion(): TransitionTable {
         events = listOf(SwingEvent.OpenDoor, SwingEvent.CloseDoor),
         stateLabel = { it.label() },
         eventLabel = { it.label() },
-        transition = { s, e -> machine.pureTransition(s, e) },
+        step = { s, e -> machine.step(s, e) },
     )
 }
 
 /**
  * PURPOSE: Hierarchical product for Connection via leaf × event probing.
  *
- * Uses shipped [ConnState.onEvent] with hierarchical parent walk (same discipline
- * as [ConnectionContext] dispatch). Each leaf is the initial state of a throwaway
- * context so Heartbeat can read ctx.current. Not a full runtime engine — only
- * product evaluation for export.
+ * Uses shipped [dispatchWithDelegation] / [ConnState.onEvent] for next-state on a
+ * probe context ([applyInitialEntry]=false so init never calls the interpreter),
+ * then pure [declaredEffects] (planTransition / same-leaf / LogRefusal).
+ * Never calls handle or EffectInterpreter.
  */
 fun evaluateConnectionHierarchy(): TransitionTable {
     val leaves = listOf(Offline, Idle, Transferring)
@@ -185,18 +170,21 @@ fun evaluateConnectionHierarchy(): TransitionTable {
     for (leaf in leaves) {
         for (event in events) {
             val result = probeConnection(leaf, event)
+            val effects = declaredEffects(leaf, event, result)
             when (result) {
                 is HandleResult.Handled -> rows += TransitionRow(
                     from = leaf.name,
                     event = event.label(),
                     to = result.next.name,
                     kind = TransitionKind.ACCEPTED,
+                    effects = effectShortNames(effects),
                 )
                 HandleResult.Unhandled -> rows += TransitionRow(
                     from = leaf.name,
                     event = event.label(),
                     to = leaf.name,
                     kind = TransitionKind.REFUSED,
+                    effects = effectShortNames(effects),
                     note = "no state in hierarchy accepted event",
                 )
             }
@@ -206,19 +194,15 @@ fun evaluateConnectionHierarchy(): TransitionTable {
 }
 
 /**
- * PURPOSE: Probe hierarchical dispatch without retaining machine state.
- * Mirrors ConnectionContext.dispatchWithDelegation using shipped onEvent.
+ * PURPOSE: Probe hierarchical dispatch without interpreter side effects.
+ *
+ * Builds a [ConnectionContext] with applyInitialEntry=false and log=null so
+ * construction and onEvent never call [fsm.sample.effect.EffectInterpreter].
+ * Uses shipped [dispatchWithDelegation] (same walk as handle).
  */
 fun probeConnection(from: ConnState, event: ConnEvent): HandleResult {
-    val ctx = ConnectionContext(initial = from, log = null)
-    var node: ConnState? = from
-    while (node != null) {
-        when (val r = node.onEvent(ctx, event)) {
-            is HandleResult.Handled -> return r
-            HandleResult.Unhandled -> node = node.parent
-        }
-    }
-    return HandleResult.Unhandled
+    val ctx = ConnectionContext(initial = from, log = null, applyInitialEntry = false)
+    return dispatchWithDelegation(ctx, from, event)
 }
 
 /**

@@ -61,7 +61,7 @@ class LatchMachine(
 
     /**
      * PURPOSE: Pure step for the latch region (next + LogTransition effect).
-     * Export still uses [pureTransition] for next-state-only product tables.
+     * Export product tables call [step] so Effects columns match pure declarations.
      */
     fun step(
         state: LatchState,
