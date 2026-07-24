@@ -1,5 +1,12 @@
 package fsm.sample.gof
 
+import fsm.sample.effect.AuditEffect
+import fsm.sample.effect.AuditInterpreter
+import fsm.sample.effect.auditEntry
+import fsm.sample.effect.auditExit
+import fsm.sample.effect.auditRefusal
+import fsm.sample.effect.auditTransition
+import fsm.sample.effect.exportLabel
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -9,9 +16,10 @@ import fsm.sample.logging.TransitionLog
  * 1. GoF State: context holds current state object; transitions replace it.
  * 2. Hierarchical FSMs: composite/leaf states; unhandled events bubble to parent
  *    (behavioral inheritance — program only differences from the superstate).
- * 3. Entry/exit / heartbeat as *declared* [ConnectionEffect]s: pure-ish handlers
- *    return next leaf + effects; the context boundary interprets them
- *    ([interpretConnection]: cross-cutting audit + domain IncHeartbeat).
+ * 3. Entry/exit / heartbeat as *declared* split audit + domain fragments: pure-ish
+ *    handlers return next leaf + domain; pure [declaredEffects] assembles LCA
+ *    fragments; the context boundary applies each fragment
+ *    (audit then domain via [AuditInterpreter.apply] + [applyDomainConnection]).
  *
  * Domain vignette: a network connection with hierarchy
  *   Offline (leaf)
@@ -22,8 +30,7 @@ import fsm.sample.logging.TransitionLog
  * Events unhandled in Idle/Transferring may still be handled by Online.
  *
  * Export product evaluation uses pure [planTransition] / [declaredEffects] and
- * probe contexts with [applyInitialEntry]=false so [interpretConnection] is never
- * invoked during documentation generation.
+ * pure [dispatchWithDelegation] (no [ConnectionContext], no interpreters).
  */
 
 /** Closed event alphabet for the connection machine. */
@@ -40,18 +47,72 @@ sealed class ConnEvent {
 
 /**
  * PURPOSE: Result of handling an event in a state object.
- * - [Handled] carries the next leaf state and any effects declared by the handler
- *   (e.g. [ConnectionEffect.IncHeartbeat]); entry/exit/transition effects are assembled
- *   via pure [declaredEffects] / [planTransition] before the boundary applies them.
+ * - [Handled] carries the next leaf and any **domain** effects declared by the
+ *   handler (e.g. [ConnectionEffect.IncHeartbeat]); entry/exit/transition audit
+ *   and domain session effects are assembled via pure [declaredEffects].
  * - [Unhandled] means "delegate to parent" (hierarchical discipline).
  */
 sealed class HandleResult {
     data class Handled(
         val next: ConnState,
-        val effects: List<ConnectionEffect> = emptyList(),
+        val domain: List<ConnectionEffect> = emptyList(),
     ) : HandleResult()
 
     data object Unhandled : HandleResult()
+}
+
+/**
+ * PURPOSE: One LCA assembly fragment — paired audit + domain for a single
+ * exit/enter/transition/handler step.
+ *
+ * Boundary applies [audit] then [domain] of this fragment before the next fragment,
+ * so Online enter keeps `LogEntry(Online)` paired with `OpenSession` before Idle's
+ * `LogEntry` (UML-style timeline with split types).
+ */
+data class EffectFragment(
+    val audit: List<AuditEffect> = emptyList(),
+    val domain: List<ConnectionEffect> = emptyList(),
+)
+
+/**
+ * PURPOSE: Pure hierarchical effect assembly as an ordered list of [EffectFragment]s.
+ *
+ * Sinks stay typed (audit vs domain) while fragment order preserves LCA interleaving
+ * for both export labels and runtime apply. Safe for export — never mutates ports/logs.
+ */
+data class ConnectionStepEffects(
+    val fragments: List<EffectFragment> = emptyList(),
+) {
+    /** Flattened audit (tests / inspection); apply uses [fragments] in order. */
+    val audit: List<AuditEffect> get() = fragments.flatMap { it.audit }
+
+    /** Flattened domain (tests / inspection); apply uses [fragments] in order. */
+    val domain: List<ConnectionEffect> get() = fragments.flatMap { it.domain }
+
+    /**
+     * PURPOSE: Export labels walk fragments in LCA order; within each fragment
+     * audit labels then domain labels (e.g. LogEntry(Online), OpenSession, LogEntry(Idle)).
+     */
+    fun exportLabels(): List<String> =
+        fragments.flatMap { f ->
+            f.audit.map { it.exportLabel() } + f.domain.map { it.exportLabel() }
+        }
+
+    operator fun plus(other: ConnectionStepEffects): ConnectionStepEffects =
+        ConnectionStepEffects(fragments + other.fragments)
+
+    companion object {
+        /** Single-fragment assembly helper (empty lists yield no fragment). */
+        fun of(
+            audit: List<AuditEffect> = emptyList(),
+            domain: List<ConnectionEffect> = emptyList(),
+        ): ConnectionStepEffects =
+            if (audit.isEmpty() && domain.isEmpty()) {
+                ConnectionStepEffects()
+            } else {
+                ConnectionStepEffects(listOf(EffectFragment(audit, domain)))
+            }
+    }
 }
 
 /**
@@ -60,26 +121,33 @@ sealed class HandleResult {
  * [parent] links form the superstate chain. Leaf states override [onEvent];
  * composite Online also handles events that leaves leave unhandled.
  * Entry/exit are pure effect *declarations* ([enterEffects]/[exitEffects]);
- * the context boundary runs them via [interpretConnection].
+ * the context boundary runs them via apply sinks.
+ *
+ * [onEvent] takes [currentLeaf] instead of a full [ConnectionContext] so
+ * hierarchical probes for export stay pure (no context construction, no
+ * initial-entry side effects).
  */
 sealed class ConnState {
     abstract val name: String
     open val parent: ConnState? get() = null
 
-    /** PURPOSE: Pure entry effect declaration (cross-cutting audit; no I/O). */
-    open fun enterEffects(machineName: String): List<ConnectionEffect> =
-        listOf(connEntry(machineName, name))
+    /** PURPOSE: Pure entry effect declaration (audit ± domain; no I/O). */
+    open fun enterEffects(machineName: String): ConnectionStepEffects =
+        ConnectionStepEffects.of(audit = listOf(auditEntry(machineName, name)))
 
-    /** PURPOSE: Pure exit effect declaration (cross-cutting audit; no I/O). */
-    open fun exitEffects(machineName: String): List<ConnectionEffect> =
-        listOf(connExit(machineName, name))
+    /** PURPOSE: Pure exit effect declaration (audit ± domain; no I/O). */
+    open fun exitEffects(machineName: String): ConnectionStepEffects =
+        ConnectionStepEffects.of(audit = listOf(auditExit(machineName, name)))
 
     /**
      * PURPOSE: Per-state behavior. Default is Unhandled so events bubble up.
      * Leaves and composites override only the events they care about.
-     * Must not mutate log/counters — declare effects on [HandleResult.Handled].
+     * Must not mutate log/ports — declare domain on [HandleResult.Handled].
+     *
+     * [currentLeaf] is the leaf active when dispatch started (for same-leaf
+     * reactions such as Heartbeat without needing a full context).
      */
-    open fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult =
+    open fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult =
         HandleResult.Unhandled
 }
 
@@ -88,7 +156,7 @@ data object Offline : ConnState() {
     override val name: String = "Offline"
     override val parent: ConnState? get() = null
 
-    override fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult = when (event) {
+    override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
         ConnEvent.Connect -> HandleResult.Handled(Idle)
         else -> HandleResult.Unhandled
     }
@@ -107,20 +175,26 @@ data object Online : ConnState() {
      * PURPOSE: Enter Online = cross-cutting entry audit + **domain** OpenSession.
      * Fires only when the LCA path includes Online (not on Idle↔Transferring).
      */
-    override fun enterEffects(machineName: String): List<ConnectionEffect> =
-        listOf(connEntry(machineName, name), ConnectionEffect.OpenSession)
+    override fun enterEffects(machineName: String): ConnectionStepEffects =
+        ConnectionStepEffects.of(
+            audit = listOf(auditEntry(machineName, name)),
+            domain = listOf(ConnectionEffect.OpenSession),
+        )
 
     /**
      * PURPOSE: Exit Online = cross-cutting exit audit + **domain** CloseSession.
      */
-    override fun exitEffects(machineName: String): List<ConnectionEffect> =
-        listOf(connExit(machineName, name), ConnectionEffect.CloseSession)
+    override fun exitEffects(machineName: String): ConnectionStepEffects =
+        ConnectionStepEffects.of(
+            audit = listOf(auditExit(machineName, name)),
+            domain = listOf(ConnectionEffect.CloseSession),
+        )
 
-    override fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult = when (event) {
+    override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
         ConnEvent.Disconnect -> HandleResult.Handled(Offline)
         ConnEvent.Heartbeat -> {
             // Superstate-only reaction: stay in current leaf; declare **domain** heartbeat.
-            HandleResult.Handled(ctx.current, listOf(ConnectionEffect.IncHeartbeat))
+            HandleResult.Handled(currentLeaf, listOf(ConnectionEffect.IncHeartbeat))
         }
         else -> HandleResult.Unhandled
     }
@@ -131,7 +205,7 @@ data object Idle : ConnState() {
     override val name: String = "Idle"
     override val parent: ConnState? get() = Online
 
-    override fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult = when (event) {
+    override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
         ConnEvent.StartTransfer -> HandleResult.Handled(Transferring)
         else -> HandleResult.Unhandled // bubbles to Online
     }
@@ -142,7 +216,7 @@ data object Transferring : ConnState() {
     override val name: String = "Transferring"
     override val parent: ConnState? get() = Online
 
-    override fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult = when (event) {
+    override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
         ConnEvent.FinishTransfer -> HandleResult.Handled(Idle)
         else -> HandleResult.Unhandled // bubbles to Online
     }
@@ -175,99 +249,114 @@ fun commonPrefixLength(a: List<ConnState>, b: List<ConnState>): Int {
 /**
  * PURPOSE: Pure assembly of hierarchical transition effects (LCA discipline).
  *
- * Order (UML-style): exit (innermost→outermost, exclusive of LCA) →
- * transition audit → [handlerEffects] (transition actions, e.g. IncHeartbeat) →
- * enter (outermost→innermost, exclusive of LCA).
+ * Fragment order: exit (innermost→outermost, exclusive of LCA) →
+ * transition audit → [handlerDomain] → enter (outermost→innermost, exclusive of LCA).
+ * Each exit/enter is one [EffectFragment] so domain (e.g. OpenSession) stays paired
+ * with its state audit in both export labels and boundary apply.
  *
- * No [ConnectionContext], assign, or [interpretConnection] — safe for export and tests.
+ * No [ConnectionContext], assign, or domain/audit apply — safe for export and tests.
  */
 fun planTransition(
     from: ConnState,
     to: ConnState,
     event: ConnEvent,
-    handlerEffects: List<ConnectionEffect> = emptyList(),
+    handlerDomain: List<ConnectionEffect> = emptyList(),
     machineName: String = "Connection",
-): List<ConnectionEffect> {
+): ConnectionStepEffects {
     val fromPath = pathFromRoot(from)
     val toPath = pathFromRoot(to)
     val lcaIndex = commonPrefixLength(fromPath, toPath)
-    val effects = mutableListOf<ConnectionEffect>()
+    var assembled = ConnectionStepEffects()
 
     // Exit states exclusive of LCA, from leaf toward root.
     for (i in fromPath.lastIndex downTo lcaIndex) {
-        effects += fromPath[i].exitEffects(machineName)
+        assembled += fromPath[i].exitEffects(machineName)
     }
 
-    effects += connTransition(
-        machine = machineName,
-        from = from.name,
-        event = event.label(),
-        to = to.name,
+    assembled += ConnectionStepEffects.of(
+        audit = listOf(
+            auditTransition(
+                machine = machineName,
+                from = from.name,
+                event = event.label(),
+                to = to.name,
+            ),
+        ),
     )
 
-    // Handler / transition-action effects between exit and enter.
-    effects += handlerEffects
+    // Handler / transition-action domain effects between exit and enter.
+    assembled += ConnectionStepEffects.of(domain = handlerDomain)
 
     // Enter states exclusive of LCA, from root toward leaf.
     for (i in lcaIndex until toPath.size) {
-        effects += toPath[i].enterEffects(machineName)
+        assembled += toPath[i].enterEffects(machineName)
     }
 
-    return effects
+    return assembled
 }
 
 /**
- * PURPOSE: Pure effect list for a hierarchical (from, event, HandleResult) triple.
+ * PURPOSE: Pure effect assembly for a hierarchical (from, event, HandleResult) triple.
  *
  * Shared by [ConnectionContext.handle] and export product evaluation so assembly
  * cannot drift:
  * - real transition → [planTransition]
- * - same-leaf handled → handler effects + transition audit
- * - unhandled → refusal audit
+ * - same-leaf handled → one fragment (transition audit + handler domain)
+ * - unhandled → refusal audit fragment
  *
- * Does not assign state or call [interpretConnection].
+ * Does not assign state or apply sinks.
  */
 fun declaredEffects(
     from: ConnState,
     event: ConnEvent,
     result: HandleResult,
     machineName: String = "Connection",
-): List<ConnectionEffect> = when (result) {
+): ConnectionStepEffects = when (result) {
     is HandleResult.Handled -> {
         val next = result.next
         if (next !== from) {
-            planTransition(from, next, event, result.effects, machineName)
+            planTransition(from, next, event, result.domain, machineName)
         } else {
-            result.effects + connTransition(
-                machine = machineName,
-                from = from.name,
-                event = event.label(),
-                to = next.name,
+            ConnectionStepEffects.of(
+                audit = listOf(
+                    auditTransition(
+                        machine = machineName,
+                        from = from.name,
+                        event = event.label(),
+                        to = next.name,
+                    ),
+                ),
+                domain = result.domain,
             )
         }
     }
-    HandleResult.Unhandled -> listOf(
-        connRefusal(
-            machine = machineName,
-            state = from.name,
-            event = event.label(),
-            reason = "no state in hierarchy accepted event",
+    HandleResult.Unhandled -> ConnectionStepEffects.of(
+        audit = listOf(
+            auditRefusal(
+                machine = machineName,
+                state = from.name,
+                event = event.label(),
+                reason = "no state in hierarchy accepted event",
+            ),
         ),
     )
 }
 
 /**
  * PURPOSE: Hierarchical event dispatch — walk leaf → parent until handled.
- * Pure control flow over shipped [ConnState.onEvent]; no effect application.
+ * Pure control flow over shipped [ConnState.onEvent]; no effect application,
+ * no [ConnectionContext] required (export-safe).
+ *
+ * [currentLeaf] is the leaf active at dispatch start (defaults to [start]).
  */
 fun dispatchWithDelegation(
-    ctx: ConnectionContext,
     start: ConnState,
     event: ConnEvent,
+    currentLeaf: ConnState = start,
 ): HandleResult {
     var node: ConnState? = start
     while (node != null) {
-        when (val r = node.onEvent(ctx, event)) {
+        when (val r = node.onEvent(event, currentLeaf)) {
             is HandleResult.Handled -> return r
             HandleResult.Unhandled -> node = node.parent
         }
@@ -282,37 +371,32 @@ fun dispatchWithDelegation(
  * Transition algorithm (ordinary code, not an engine):
  * 1. Try current leaf; if Unhandled, walk parent chain until Handled or root.
  * 2. Assemble pure [declaredEffects] from the probe result.
- * 3. [interpretConnection] while [current] is still the old leaf when needed
- *    ("exit while still in old state"), then assign [current] if the leaf changed.
+ * 3. Apply [ConnectionStepEffects] fragment-wise while [current] is still the old
+ *    leaf when needed ("exit while still in old state"), then assign [current]
+ *    if the leaf changed.
  *
- * [applyInitialEntry]: when true (default), init enters the initial ancestry via
- * the interpreter. Export/product probes pass false so construction never calls
- * [interpretConnection].
+ * Initial entry always runs on construction (outermost → innermost enter fragments)
+ * so production paths get Offline entry audit. Export never constructs this class —
+ * it uses pure [dispatchWithDelegation] + [declaredEffects] only.
+ *
+ * Dual sinks: [log] (audit) + [port] (domain, including heartbeats). No separate
+ * heartbeat callback or context-owned counter.
  */
 class ConnectionContext(
     initial: ConnState = Offline,
     val log: TransitionLog? = null,
     val port: ConnectionPort = ConnectionPort(),
     val machineName: String = "Connection",
-    applyInitialEntry: Boolean = true,
 ) {
     var current: ConnState = initial
         private set
 
-    /**
-     * Heartbeat counter applied only at the effect boundary (not in onEvent).
-     * Private setter so handlers cannot bypass [interpretConnection] via mutation.
-     * Domain-specific: only ConnectionEffect.IncHeartbeat bumps this.
-     */
-    var heartbeatCount: Int = 0
-        private set
-
     init {
-        if (applyInitialEntry) {
-            // Enter the full ancestry of the initial state outermost → innermost.
-            val effects = pathFromRoot(initial).flatMap { it.enterEffects(machineName) }
-            applyEffects(effects)
+        // Enter the full ancestry of the initial state outermost → innermost.
+        val effects = pathFromRoot(initial).fold(ConnectionStepEffects()) { acc, s ->
+            acc + s.enterEffects(machineName)
         }
+        applyEffects(effects)
     }
 
     /**
@@ -321,7 +405,7 @@ class ConnectionContext(
      */
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
-        val result = dispatchWithDelegation(this, fromLeaf, event)
+        val result = dispatchWithDelegation(fromLeaf, event, fromLeaf)
         val effects = declaredEffects(fromLeaf, event, result, machineName)
         return when (result) {
             is HandleResult.Unhandled -> {
@@ -340,20 +424,13 @@ class ConnectionContext(
     }
 
     /**
-     * PURPOSE: Instance facade over pure top-level [planTransition] (machineName bound).
-     * Kept so tests can call `ctx.planTransition(...)` without re-stating the name.
+     * PURPOSE: Apply each LCA fragment as audit-then-domain so paired enter/exit
+     * domain (OpenSession/CloseSession) stays on the timeline next to its audit.
      */
-    fun planTransition(
-        from: ConnState,
-        to: ConnState,
-        event: ConnEvent,
-        handlerEffects: List<ConnectionEffect> = emptyList(),
-    ): List<ConnectionEffect> =
-        fsm.sample.gof.planTransition(from, to, event, handlerEffects, machineName)
-
-    private fun applyEffects(effects: List<ConnectionEffect>) {
-        interpretConnection(effects, log, port) {
-            heartbeatCount += 1
+    private fun applyEffects(effects: ConnectionStepEffects) {
+        for (fragment in effects.fragments) {
+            AuditInterpreter.apply(fragment.audit, log)
+            applyDomainConnection(fragment.domain, port)
         }
     }
 }

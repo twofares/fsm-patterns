@@ -1,26 +1,18 @@
 package fsm.sample.csp
 
-import fsm.sample.effect.AuditEffect
-import fsm.sample.effect.AuditInterpreter
-import fsm.sample.effect.auditRefusal
-import fsm.sample.effect.auditTransition
-import fsm.sample.effect.exportLabel
-import fsm.sample.logging.TransitionLog
-
 /**
- * PURPOSE: FileProtocol **domain** effect ADT — CSP accept/refuse + I/O intents.
+ * PURPOSE: FileProtocol **domain** effect ADT — I/O intents only (no audit wrappers).
  *
- * Cross-cutting:
- * - [Audit] LogTransition on accept, LogRefusal on refuse → [TransitionLog]
- *
+ * Cross-cutting accept/refuse audit is a plain `List<AuditEffect>` on [OfferStep].
  * Domain-specific (only when accepted — refuse is audit-only):
  * - [OpenHandle] / [ReadChunk] / [CloseHandle] → [FilePort] ops
  *
  * Teaching: refusal never emits domain I/O intents.
+ *
+ * Domain policy (engagement-driven): domain ops fire on every accepted menu
+ * engagement, including self-loop Read (state stays Opened).
  */
 sealed class FileEffect {
-    data class Audit(val audit: AuditEffect) : FileEffect()
-
     /** Domain: open the file handle (accepted Open). */
     data object OpenHandle : FileEffect()
 
@@ -55,40 +47,22 @@ class FilePort {
     fun snapshot(): String = "fileOps=${ops.map { it.label() }}"
 }
 
-fun fileTransition(
-    machine: String,
-    from: String,
-    event: String,
-    to: String,
-): FileEffect = FileEffect.Audit(auditTransition(machine, from, event, to))
-
-fun fileRefusal(
-    machine: String,
-    state: String,
-    event: String,
-    reason: String,
-): FileEffect = FileEffect.Audit(auditRefusal(machine, state, event, reason))
-
 /**
- * PURPOSE: Local boundary — audit → log; domain I/O intents → [FilePort].
+ * PURPOSE: Local domain boundary — I/O intents → [FilePort].
+ * Audit is applied separately via [fsm.sample.effect.AuditInterpreter].
  */
-fun interpretFile(
-    effects: List<FileEffect>,
-    log: TransitionLog? = null,
-    port: FilePort? = null,
-) {
-    for (effect in effects) {
+fun applyDomainFile(domain: List<FileEffect>, port: FilePort) {
+    for (effect in domain) {
         when (effect) {
-            is FileEffect.Audit -> AuditInterpreter.applyOne(effect.audit, log)
-            FileEffect.OpenHandle -> port?.record(FileOp.Open)
-            FileEffect.ReadChunk -> port?.record(FileOp.Read)
-            FileEffect.CloseHandle -> port?.record(FileOp.Close)
+            FileEffect.OpenHandle -> port.record(FileOp.Open)
+            FileEffect.ReadChunk -> port.record(FileOp.Read)
+            FileEffect.CloseHandle -> port.record(FileOp.Close)
         }
     }
 }
 
+/** PURPOSE: Export short name (pure label for Effects column). */
 fun FileEffect.exportLabel(): String = when (this) {
-    is FileEffect.Audit -> audit.exportLabel()
     FileEffect.OpenHandle -> "OpenHandle"
     FileEffect.ReadChunk -> "ReadChunk"
     FileEffect.CloseHandle -> "CloseHandle"

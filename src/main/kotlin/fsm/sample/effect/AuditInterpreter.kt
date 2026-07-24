@@ -5,13 +5,12 @@ import fsm.sample.logging.TransitionLog
 /**
  * PURPOSE: **Cross-cutting** boundary that applies [AuditEffect]s to [TransitionLog].
  *
- * Shared by every per-machine interpreter for the audit subset of its ADT.
- * Domain-only effects (heartbeat, CSP control, etc.) are handled by those
- * local interpreters — never here.
+ * Shared by every machine handle/offer path for the audit list only.
+ * Domain-only effects are applied by per-machine applyDomain helpers — never here.
  *
- * Ordinary Kotlin — not an effect runtime. Null [log] silently drops audit
- * (useful for pure probes / export construction). Per-machine interpreters
- * call [applyOne] once per wrapped audit effect.
+ * Ordinary Kotlin — not an effect runtime. Null [log] drops audit (rare; pure paths
+ * never call this). Production handles pass a real [TransitionLog] when observability
+ * is wanted; pure steps never invoke [apply] / [applyOne].
  */
 object AuditInterpreter {
 
@@ -45,5 +44,10 @@ object AuditInterpreter {
                     reason = effect.reason,
                 )
         }
+    }
+
+    /** Apply a list of audit effects in order. */
+    fun apply(audit: List<AuditEffect>, log: TransitionLog? = null) {
+        for (effect in audit) applyOne(effect, log)
     }
 }

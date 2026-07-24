@@ -8,7 +8,7 @@ package fsm.sample.export
  *
  * Each [TransitionRow] carries next-state outcome plus short labels of declared
  * effects from pure step APIs (never from per-machine interpreters).
- * Labels come from each machine's `exportLabel()` — no global Effect ADT.
+ * Labels come from audit `exportLabel()` + domain `exportLabel()` — no global Effect ADT.
  */
 
 enum class TransitionKind {

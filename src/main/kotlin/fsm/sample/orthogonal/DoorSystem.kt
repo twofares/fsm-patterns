@@ -1,6 +1,10 @@
 package fsm.sample.orthogonal
 
+import fsm.sample.effect.AuditEffect
+import fsm.sample.effect.AuditInterpreter
 import fsm.sample.effect.StepResult
+import fsm.sample.effect.auditRefusal
+import fsm.sample.effect.auditTransition
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -10,7 +14,7 @@ import fsm.sample.logging.TransitionLog
  * Effects:
  * - **Cross-cutting** region/container audit → shared [TransitionLog]
  * - **Domain** actuators (strike / deadbolt / chime) → shared [DoorPort]
- * - Container **refusals are audit-only** (no domain actuators)
+ * - Container **refusals are audit-only** (`List<AuditEffect>`, no DoorEffect ADT)
  */
 
 // --- Region A: Latch ---------------------------------------------------------
@@ -32,12 +36,12 @@ sealed class LatchEvent {
 
 /**
  * PURPOSE: Independent latch region machine.
- * Pure [step] declares audit + domain actuator when becoming Locked/Unlocked.
+ * Pure [step] declares audit + domain actuator for every engagement (total-step).
  */
 class LatchMachine(
     initial: LatchState = LatchState.Locked,
     private val log: TransitionLog? = null,
-    private val port: DoorPort? = null,
+    val port: DoorPort = DoorPort(),
     private val machineName: String = "Latch",
 ) {
     var current: LatchState = initial
@@ -49,8 +53,9 @@ class LatchMachine(
     }
 
     /**
-     * PURPOSE: Pure step — audit always; domain actuator only for target mode.
-     * Unlock → EnergizeStrike; Lock → EngageDeadbolt (even if already that mode).
+     * PURPOSE: Pure step — audit always; domain actuator for target mode.
+     * Unlock → EnergizeStrike; Lock → EngageDeadbolt (engagement-driven, even
+     * if already that mode).
      */
     fun step(
         state: LatchState,
@@ -63,22 +68,23 @@ class LatchMachine(
         }
         return StepResult(
             next = next,
-            effects = listOf(
-                latchTransition(
+            audit = listOf(
+                auditTransition(
                     machine = machineName,
                     from = state.label(),
                     event = event.label(),
                     to = next.label(),
                 ),
-                domain,
             ),
+            domain = listOf(domain),
         )
     }
 
     fun handle(event: LatchEvent): LatchState {
         val result = step(current, event)
         current = result.next
-        interpretLatch(result.effects, log, port)
+        AuditInterpreter.apply(result.audit, log)
+        applyDomainLatch(result.domain, port)
         return current
     }
 }
@@ -107,7 +113,7 @@ sealed class SwingEvent {
 class SwingMachine(
     initial: SwingState = SwingState.Closed,
     private val log: TransitionLog? = null,
-    private val port: DoorPort? = null,
+    val port: DoorPort = DoorPort(),
     private val machineName: String = "Swing",
 ) {
     var current: SwingState = initial
@@ -123,24 +129,30 @@ class SwingMachine(
         event: SwingEvent,
     ): StepResult<SwingState, SwingEffect> {
         val next = pureTransition(state, event)
-        val effects = mutableListOf(
-            swingTransition(
-                machine = machineName,
-                from = state.label(),
-                event = event.label(),
-                to = next.label(),
-            ),
-        )
-        if (event is SwingEvent.OpenDoor) {
-            effects += SwingEffect.SoundChime
+        val domain = if (event is SwingEvent.OpenDoor) {
+            listOf(SwingEffect.SoundChime)
+        } else {
+            emptyList()
         }
-        return StepResult(next = next, effects = effects)
+        return StepResult(
+            next = next,
+            audit = listOf(
+                auditTransition(
+                    machine = machineName,
+                    from = state.label(),
+                    event = event.label(),
+                    to = next.label(),
+                ),
+            ),
+            domain = domain,
+        )
     }
 
     fun handle(event: SwingEvent): SwingState {
         val result = step(current, event)
         current = result.next
-        interpretSwing(result.effects, log, port)
+        AuditInterpreter.apply(result.audit, log)
+        applyDomainSwing(result.domain, port)
         return current
     }
 }
@@ -157,7 +169,7 @@ sealed class DoorEvent {
 
 /**
  * PURPOSE: Orthogonal container — shared log + [DoorPort] for both regions.
- * Refused Open/Lock: audit only, port unchanged.
+ * Refused Open/Lock: audit only, port unchanged. No thin DoorEffect ADT.
  */
 class DoorSystem(
     val log: TransitionLog = TransitionLog(),
@@ -172,17 +184,18 @@ class DoorSystem(
 
     /**
      * PURPOSE: Pure container guard — refusal effects are **audit-only**.
+     * Returns plain [AuditEffect] list (no one-arm DoorEffect sealed type).
      */
     fun guardRefusalEffects(
         event: DoorEvent,
         latchState: LatchState = latch.current,
         swingState: SwingState = swing.current,
         config: String = "latch=${latchState.label()}, swing=${swingState.label()}",
-    ): List<DoorEffect> = when (event) {
+    ): List<AuditEffect> = when (event) {
         DoorEvent.Open ->
             if (latchState is LatchState.Locked) {
                 listOf(
-                    doorRefusal(
+                    auditRefusal(
                         machine = machineName,
                         state = config,
                         event = event.label(),
@@ -195,7 +208,7 @@ class DoorSystem(
         DoorEvent.Lock ->
             if (swingState is SwingState.Open) {
                 listOf(
-                    doorRefusal(
+                    auditRefusal(
                         machine = machineName,
                         state = config,
                         event = event.label(),
@@ -211,7 +224,7 @@ class DoorSystem(
     fun handle(event: DoorEvent): Boolean {
         val refusal = guardRefusalEffects(event)
         if (refusal.isNotEmpty()) {
-            interpretDoor(refusal, log)
+            AuditInterpreter.apply(refusal, log)
             return false
         }
         return when (event) {

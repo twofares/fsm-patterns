@@ -1,24 +1,21 @@
 package fsm.sample.orthogonal
 
-import fsm.sample.effect.AuditEffect
-import fsm.sample.effect.AuditInterpreter
-import fsm.sample.effect.auditRefusal
-import fsm.sample.effect.auditTransition
-import fsm.sample.effect.exportLabel
-import fsm.sample.logging.TransitionLog
-
 /**
- * PURPOSE: Orthogonal door effects — region audit + **domain** actuators.
+ * PURPOSE: Orthogonal door **domain** effects — region actuators only.
  *
- * Cross-cutting: [LatchEffect.Audit] / [SwingEffect.Audit] / [DoorEffect.Audit]
- * → same [TransitionLog] format as other machines.
+ * Cross-cutting audit is a plain `List<AuditEffect>` on [fsm.sample.effect.StepResult]
+ * (regions) or container guard refusals — never nested on these ADTs.
  *
- * Domain-specific (region success only; container refusals are audit-only):
- * - [LatchEffect.EnergizeStrike] on successful Unlock
- * - [LatchEffect.EngageDeadbolt] on successful Lock
- * - [SwingEffect.SoundChime] on successful Open
+ * Domain-specific (region success; container refusals are audit-only):
+ * - [LatchEffect.EnergizeStrike] on Unlock engagement
+ * - [LatchEffect.EngageDeadbolt] on Lock engagement
+ * - [SwingEffect.SoundChime] on OpenDoor engagement
  *
  * Shared [DoorPort] collects actuators for the whole door system.
+ * No thin `DoorEffect` ADT: guard refusals return `List<AuditEffect>` directly.
+ *
+ * Domain policy (total / engagement-driven): actuators fire for every accepted
+ * region engagement, including self-loops (e.g. Lock while already Locked).
  */
 
 /** PURPOSE: Domain actuator commands (no real hardware). */
@@ -48,8 +45,6 @@ class DoorPort {
 // --- Latch -------------------------------------------------------------------
 
 sealed class LatchEffect {
-    data class Audit(val audit: AuditEffect) : LatchEffect()
-
     /** Domain: unlock hardware strike. */
     data object EnergizeStrike : LatchEffect()
 
@@ -57,29 +52,20 @@ sealed class LatchEffect {
     data object EngageDeadbolt : LatchEffect()
 }
 
-fun latchTransition(
-    machine: String,
-    from: String,
-    event: String,
-    to: String,
-): LatchEffect = LatchEffect.Audit(auditTransition(machine, from, event, to))
-
-fun interpretLatch(
-    effects: List<LatchEffect>,
-    log: TransitionLog? = null,
-    port: DoorPort? = null,
-) {
-    for (effect in effects) {
+/**
+ * PURPOSE: Local domain boundary for Latch.
+ * Audit is applied separately via [fsm.sample.effect.AuditInterpreter].
+ */
+fun applyDomainLatch(domain: List<LatchEffect>, port: DoorPort) {
+    for (effect in domain) {
         when (effect) {
-            is LatchEffect.Audit -> AuditInterpreter.applyOne(effect.audit, log)
-            LatchEffect.EnergizeStrike -> port?.record(DoorActuator.EnergizeStrike)
-            LatchEffect.EngageDeadbolt -> port?.record(DoorActuator.EngageDeadbolt)
+            LatchEffect.EnergizeStrike -> port.record(DoorActuator.EnergizeStrike)
+            LatchEffect.EngageDeadbolt -> port.record(DoorActuator.EngageDeadbolt)
         }
     }
 }
 
 fun LatchEffect.exportLabel(): String = when (this) {
-    is LatchEffect.Audit -> audit.exportLabel()
     LatchEffect.EnergizeStrike -> "EnergizeStrike"
     LatchEffect.EngageDeadbolt -> "EngageDeadbolt"
 }
@@ -87,62 +73,22 @@ fun LatchEffect.exportLabel(): String = when (this) {
 // --- Swing -------------------------------------------------------------------
 
 sealed class SwingEffect {
-    data class Audit(val audit: AuditEffect) : SwingEffect()
-
     /** Domain: chime when door opens. */
     data object SoundChime : SwingEffect()
 }
 
-fun swingTransition(
-    machine: String,
-    from: String,
-    event: String,
-    to: String,
-): SwingEffect = SwingEffect.Audit(auditTransition(machine, from, event, to))
-
-fun interpretSwing(
-    effects: List<SwingEffect>,
-    log: TransitionLog? = null,
-    port: DoorPort? = null,
-) {
-    for (effect in effects) {
+/**
+ * PURPOSE: Local domain boundary for Swing.
+ * Audit is applied separately via [fsm.sample.effect.AuditInterpreter].
+ */
+fun applyDomainSwing(domain: List<SwingEffect>, port: DoorPort) {
+    for (effect in domain) {
         when (effect) {
-            is SwingEffect.Audit -> AuditInterpreter.applyOne(effect.audit, log)
-            SwingEffect.SoundChime -> port?.record(DoorActuator.SoundChime)
+            SwingEffect.SoundChime -> port.record(DoorActuator.SoundChime)
         }
     }
 }
 
 fun SwingEffect.exportLabel(): String = when (this) {
-    is SwingEffect.Audit -> audit.exportLabel()
     SwingEffect.SoundChime -> "SoundChime"
-}
-
-// --- Container (guards: audit only) ------------------------------------------
-
-/**
- * PURPOSE: DoorSystem container effects — **guard refusals are audit-only**.
- * No domain actuators fire when policy blocks Open/Lock.
- */
-sealed class DoorEffect {
-    data class Audit(val audit: AuditEffect) : DoorEffect()
-}
-
-fun doorRefusal(
-    machine: String,
-    state: String,
-    event: String,
-    reason: String,
-): DoorEffect = DoorEffect.Audit(auditRefusal(machine, state, event, reason))
-
-fun interpretDoor(effects: List<DoorEffect>, log: TransitionLog? = null) {
-    for (effect in effects) {
-        when (effect) {
-            is DoorEffect.Audit -> AuditInterpreter.applyOne(effect.audit, log)
-        }
-    }
-}
-
-fun DoorEffect.exportLabel(): String = when (this) {
-    is DoorEffect.Audit -> audit.exportLabel()
 }

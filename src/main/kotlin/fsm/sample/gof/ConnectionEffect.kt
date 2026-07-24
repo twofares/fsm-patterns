@@ -1,30 +1,20 @@
 package fsm.sample.gof
 
-import fsm.sample.effect.AuditEffect
-import fsm.sample.effect.AuditInterpreter
-import fsm.sample.effect.auditEntry
-import fsm.sample.effect.auditExit
-import fsm.sample.effect.auditRefusal
-import fsm.sample.effect.auditTransition
-import fsm.sample.effect.exportLabel
-import fsm.sample.logging.TransitionLog
-
 /**
- * PURPOSE: Connection **domain** effect ADT — rich domain vs cross-cutting demo.
+ * PURPOSE: Connection **domain** effect ADT — session/heartbeat intents only.
  *
- * Cross-cutting ([Audit]):
- * - LogTransition / LogEntry / LogExit / LogRefusal → [TransitionLog]
+ * Cross-cutting audit is a plain `List<AuditEffect>` assembled by [planTransition]
+ * / [declaredEffects], not nested here.
  *
  * Domain-specific (this machine only):
  * - [IncHeartbeat] — Online superstate reaction
  * - [OpenSession] — session lifecycle when entering Online composite
  * - [CloseSession] — session lifecycle when leaving Online composite
  *
- * Separate sealed hierarchy: [LightEffect] cannot hold these domain cases.
+ * Separate sealed hierarchy: [fsm.sample.flat.LightEffect] cannot hold these cases.
+ * All domain application goes through [ConnectionPort] (including heartbeats).
  */
 sealed class ConnectionEffect {
-    data class Audit(val audit: AuditEffect) : ConnectionEffect()
-
     data object IncHeartbeat : ConnectionEffect()
 
     /** Domain: open network session (paired with Online enter). */
@@ -41,72 +31,51 @@ sealed class SessionOp {
     fun label(): String = this::class.simpleName ?: toString()
 }
 
-/** PURPOSE: In-memory domain port for connection session lifecycle. */
+/**
+ * PURPOSE: In-memory domain port for connection session + heartbeat.
+ * Single sink for all Connection domain effects (no separate heartbeat callback).
+ */
 class ConnectionPort {
     private val _sessions = mutableListOf<SessionOp>()
     val sessions: List<SessionOp> get() = _sessions.toList()
+
+    /** Heartbeat counter applied only via [incHeartbeat] at the domain boundary. */
+    var heartbeats: Int = 0
+        private set
 
     fun record(op: SessionOp) {
         _sessions += op
     }
 
-    fun clear() {
-        _sessions.clear()
+    fun incHeartbeat() {
+        heartbeats += 1
     }
 
-    fun snapshot(): String = "sessions=${sessions.map { it.label() }}"
+    fun clear() {
+        _sessions.clear()
+        heartbeats = 0
+    }
+
+    fun snapshot(): String =
+        "sessions=${sessions.map { it.label() }} heartbeats=$heartbeats"
 }
 
-fun connTransition(
-    machine: String,
-    from: String,
-    event: String,
-    to: String,
-): ConnectionEffect = ConnectionEffect.Audit(auditTransition(machine, from, event, to))
-
-fun connEntry(
-    machine: String,
-    state: String,
-    detail: String? = null,
-): ConnectionEffect = ConnectionEffect.Audit(auditEntry(machine, state, detail))
-
-fun connExit(
-    machine: String,
-    state: String,
-    detail: String? = null,
-): ConnectionEffect = ConnectionEffect.Audit(auditExit(machine, state, detail))
-
-fun connRefusal(
-    machine: String,
-    state: String,
-    event: String,
-    reason: String,
-): ConnectionEffect = ConnectionEffect.Audit(auditRefusal(machine, state, event, reason))
-
 /**
- * PURPOSE: Local Connection interpreter.
- * - Audit → [log]
- * - IncHeartbeat → required [onIncHeartbeat]
- * - OpenSession / CloseSession → [port]
+ * PURPOSE: Local domain boundary for Connection.
+ * All domain cases → [ConnectionPort]; audit is applied separately.
  */
-fun interpretConnection(
-    effects: List<ConnectionEffect>,
-    log: TransitionLog? = null,
-    port: ConnectionPort? = null,
-    onIncHeartbeat: () -> Unit,
-) {
-    for (effect in effects) {
+fun applyDomainConnection(domain: List<ConnectionEffect>, port: ConnectionPort) {
+    for (effect in domain) {
         when (effect) {
-            is ConnectionEffect.Audit -> AuditInterpreter.applyOne(effect.audit, log)
-            ConnectionEffect.IncHeartbeat -> onIncHeartbeat()
-            ConnectionEffect.OpenSession -> port?.record(SessionOp.Opened)
-            ConnectionEffect.CloseSession -> port?.record(SessionOp.Closed)
+            ConnectionEffect.IncHeartbeat -> port.incHeartbeat()
+            ConnectionEffect.OpenSession -> port.record(SessionOp.Opened)
+            ConnectionEffect.CloseSession -> port.record(SessionOp.Closed)
         }
     }
 }
 
+/** PURPOSE: Export short name (pure label for Effects column). */
 fun ConnectionEffect.exportLabel(): String = when (this) {
-    is ConnectionEffect.Audit -> audit.exportLabel()
     ConnectionEffect.IncHeartbeat -> "IncHeartbeat"
     ConnectionEffect.OpenSession -> "OpenSession"
     ConnectionEffect.CloseSession -> "CloseSession"

@@ -4,15 +4,15 @@ import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.OfferStep
-import fsm.sample.csp.exportLabel
+import fsm.sample.csp.exportLabels
 import fsm.sample.effect.StepResult
+import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
 import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnState
-import fsm.sample.gof.ConnectionContext
 import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
@@ -20,7 +20,6 @@ import fsm.sample.gof.Online
 import fsm.sample.gof.Transferring
 import fsm.sample.gof.declaredEffects
 import fsm.sample.gof.dispatchWithDelegation
-import fsm.sample.gof.exportLabel
 import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
@@ -39,24 +38,24 @@ import fsm.sample.orthogonal.exportLabel
  * reflection; domains listed explicitly from sealed sets.
  *
  * Never calls per-machine interpreters, handle, or offer during export — only
- * pure step / stepOffer / planTransition / declaredEffects, plus hierarchical
- * onEvent probes on contexts with applyInitialEntry=false.
+ * pure step / stepOffer / planTransition / declaredEffects, plus pure hierarchical
+ * [dispatchWithDelegation] (no [fsm.sample.gof.ConnectionContext]).
  */
 
 // --- Generic product helpers -------------------------------------------------
 
 /**
  * PURPOSE: Evaluate a total pure step on the Cartesian product.
- * Every pair is ACCEPTED; [effects] come from [StepResult.effects] labels.
+ * Every pair is ACCEPTED; [effects] come from audit labels + domain labels.
  */
-fun <S, Ev, Efx> productEvaluateTotal(
+fun <S, Ev, D> productEvaluateTotal(
     machine: String,
     states: List<S>,
     events: List<Ev>,
     stateLabel: (S) -> String,
     eventLabel: (Ev) -> String,
-    step: (S, Ev) -> StepResult<S, Efx>,
-    effectLabel: (Efx) -> String,
+    step: (S, Ev) -> StepResult<S, D>,
+    domainLabel: (D) -> String,
 ): TransitionTable {
     val rows = mutableListOf<TransitionRow>()
     for (s in states) {
@@ -67,7 +66,7 @@ fun <S, Ev, Efx> productEvaluateTotal(
                 event = eventLabel(e),
                 to = stateLabel(result.next),
                 kind = TransitionKind.ACCEPTED,
-                effects = effectShortNames(result.effects, effectLabel),
+                effects = result.exportLabels(domainLabel),
             )
         }
     }
@@ -78,7 +77,7 @@ fun <S, Ev, Efx> productEvaluateTotal(
 
 /**
  * PURPOSE: Complete transition table for TrafficLight via pure [step].
- * Domain: all LightState × all LightEvent; effects from StepResult&lt;LightEffect&gt;.
+ * Domain: all LightState × all LightEvent; effects from split StepResult lists.
  */
 fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
     machine = "TrafficLight",
@@ -87,12 +86,12 @@ fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
     stateLabel = { it.label() },
     eventLabel = { it.label() },
     step = { s, e -> step(s, e) },
-    effectLabel = { it.exportLabel() },
+    domainLabel = { it.exportLabel() },
 )
 
 /**
  * PURPOSE: Complete CSP table for FileProtocol via pure [FileProtocol.stepOffer].
- * Non-menu alphabet events are REFUSED with FileEffect audit refusals.
+ * Non-menu alphabet events are REFUSED with audit refusals (domain empty).
  * No [FileProtocol.offer] / interpreter — pure product only.
  */
 fun evaluateFileProtocol(): TransitionTable {
@@ -109,14 +108,14 @@ fun evaluateFileProtocol(): TransitionTable {
                     event = e.label(),
                     to = result.next.label(),
                     kind = TransitionKind.ACCEPTED,
-                    effects = effectShortNames(result.effects) { it.exportLabel() },
+                    effects = result.exportLabels(),
                 )
                 is OfferStep.Refused -> rows += TransitionRow(
                     from = s.label(),
                     event = e.label(),
                     to = result.next.label(),
                     kind = TransitionKind.REFUSED,
-                    effects = effectShortNames(result.effects) { it.exportLabel() },
+                    effects = result.exportLabels(),
                     note = "not in menu",
                 )
             }
@@ -126,7 +125,7 @@ fun evaluateFileProtocol(): TransitionTable {
 }
 
 /**
- * PURPOSE: Latch region pure product via [LatchMachine.step] (next + LatchEffect).
+ * PURPOSE: Latch region pure product via [LatchMachine.step] (next + split lists).
  */
 fun evaluateLatchRegion(): TransitionTable {
     val machine = LatchMachine()
@@ -137,12 +136,12 @@ fun evaluateLatchRegion(): TransitionTable {
         stateLabel = { it.label() },
         eventLabel = { it.label() },
         step = { s, e -> machine.step(s, e) },
-        effectLabel = { it.exportLabel() },
+        domainLabel = { it.exportLabel() },
     )
 }
 
 /**
- * PURPOSE: Swing region pure product via [SwingMachine.step] (next + SwingEffect).
+ * PURPOSE: Swing region pure product via [SwingMachine.step] (next + split lists).
  */
 fun evaluateSwingRegion(): TransitionTable {
     val machine = SwingMachine()
@@ -153,20 +152,19 @@ fun evaluateSwingRegion(): TransitionTable {
         stateLabel = { it.label() },
         eventLabel = { it.label() },
         step = { s, e -> machine.step(s, e) },
-        effectLabel = { it.exportLabel() },
+        domainLabel = { it.exportLabel() },
     )
 }
 
 /**
  * PURPOSE: Hierarchical product for Connection via leaf × event probing.
  *
- * Uses shipped [dispatchWithDelegation] / [ConnState.onEvent] for next-state on a
- * probe context ([applyInitialEntry]=false so init never calls the interpreter),
+ * Uses pure [dispatchWithDelegation] for next-state (no [ConnectionContext]),
  * then pure [declaredEffects] (planTransition / same-leaf / refusal audit).
- * Never calls handle or [interpretConnection].
+ * Never calls handle or apply sinks — export-safe.
  */
 fun evaluateConnectionHierarchy(): TransitionTable {
-    val leaves = listOf(Offline, Idle, Transferring)
+    val leaves = connectionLeaves()
     val events = listOf(
         ConnEvent.Connect,
         ConnEvent.Disconnect,
@@ -185,14 +183,14 @@ fun evaluateConnectionHierarchy(): TransitionTable {
                     event = event.label(),
                     to = result.next.name,
                     kind = TransitionKind.ACCEPTED,
-                    effects = effectShortNames(effects) { it.exportLabel() },
+                    effects = effects.exportLabels(),
                 )
                 HandleResult.Unhandled -> rows += TransitionRow(
                     from = leaf.name,
                     event = event.label(),
                     to = leaf.name,
                     kind = TransitionKind.REFUSED,
-                    effects = effectShortNames(effects) { it.exportLabel() },
+                    effects = effects.exportLabels(),
                     note = "no state in hierarchy accepted event",
                 )
             }
@@ -202,16 +200,13 @@ fun evaluateConnectionHierarchy(): TransitionTable {
 }
 
 /**
- * PURPOSE: Probe hierarchical dispatch without interpreter side effects.
+ * PURPOSE: Pure hierarchical probe — no context, no interpreters, no ports.
  *
- * Builds a [ConnectionContext] with applyInitialEntry=false and log=null so
- * construction and onEvent never call [interpretConnection].
- * Uses shipped [dispatchWithDelegation] (same walk as handle).
+ * Uses shipped [dispatchWithDelegation] only. Heartbeat stays on the probed
+ * leaf via [currentLeaf] without needing [ConnectionContext.current].
  */
-fun probeConnection(from: ConnState, event: ConnEvent): HandleResult {
-    val ctx = ConnectionContext(initial = from, log = null, applyInitialEntry = false)
-    return dispatchWithDelegation(ctx, from, event)
-}
+fun probeConnection(from: ConnState, event: ConnEvent): HandleResult =
+    dispatchWithDelegation(from, event, currentLeaf = from)
 
 /**
  * PURPOSE: Explicit hierarchy tree for Mermaid nesting (structure method 2).

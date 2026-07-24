@@ -1,15 +1,17 @@
 package fsm.sample.flat
 
+import fsm.sample.effect.AuditInterpreter
 import fsm.sample.effect.StepResult
+import fsm.sample.effect.auditTransition
 import fsm.sample.logging.TransitionLog
 
 /**
  * PURPOSE: Classical finite-state machine encoded as ordinary Kotlin — no engine.
  *
- * Pure [step] returns next state + [LightEffect] list mixing:
- * - cross-cutting [LightEffect.Audit] (transition log)
- * - domain [LightEffect.DriveLamp] (signal hardware intent)
- * Boundary [handle] assigns state then [interpretLight] to dual sinks (log + [LightPort]).
+ * Pure [step] returns next state + split lists:
+ * - [StepResult.audit]: cross-cutting transition log
+ * - [StepResult.domain]: [LightEffect.DriveLamp] (signal hardware intent)
+ * Boundary [handle] assigns state then [AuditInterpreter.apply] + [applyDomainLight].
  */
 
 /** Closed set of traffic-light modes. Sealed = no external subclasses. */
@@ -52,6 +54,9 @@ fun transition(state: LightState, event: LightEvent): LightState = when (event) 
 /**
  * PURPOSE: Pure step — next + audit (cross-cutting) + DriveLamp (domain).
  * Does not touch log or [LightPort].
+ *
+ * Total-step policy: domain [DriveLamp] is always declared for the engagement
+ * (including self-loops such as Emergency on Red).
  */
 fun step(
     state: LightState,
@@ -61,20 +66,21 @@ fun step(
     val next = transition(state, event)
     return StepResult(
         next = next,
-        effects = listOf(
-            lightTransition(
+        audit = listOf(
+            auditTransition(
                 machine = machineName,
                 from = state.label(),
                 event = event.label(),
                 to = next.label(),
             ),
-            LightEffect.DriveLamp(next.label()),
         ),
+        domain = listOf(LightEffect.DriveLamp(next.label())),
     )
 }
 
 /**
  * PURPOSE: Boundary holder — assign state, then interpret to log + port.
+ * Pure [step] never runs interpreters; only [handle] does.
  */
 class TrafficLight(
     initial: LightState = LightState.Red,
@@ -88,7 +94,8 @@ class TrafficLight(
     fun handle(event: LightEvent): LightState {
         val result = step(current, event, machineName)
         current = result.next
-        interpretLight(result.effects, log, port)
+        AuditInterpreter.apply(result.audit, log)
+        applyDomainLight(result.domain, port)
         return current
     }
 }

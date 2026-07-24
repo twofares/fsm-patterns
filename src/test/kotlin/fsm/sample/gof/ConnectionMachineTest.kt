@@ -35,11 +35,11 @@ class ConnectionMachineTest {
         val ctx = ConnectionContext(log = log)
         ctx.handle(ConnEvent.Connect)
         assertEquals(Idle, ctx.current)
-        assertEquals(0, ctx.heartbeatCount)
+        assertEquals(0, ctx.port.heartbeats)
 
         assertTrue(ctx.handle(ConnEvent.Heartbeat))
         assertEquals(Idle, ctx.current)
-        assertEquals(1, ctx.heartbeatCount)
+        assertEquals(1, ctx.port.heartbeats)
 
         val transitions = log.snapshot().filter {
             it.kind == RecordKind.TRANSITION && it.event == "Heartbeat"

@@ -4,7 +4,8 @@ import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.OfferStep
-import fsm.sample.csp.exportLabel
+import fsm.sample.csp.exportLabels
+import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
 import fsm.sample.flat.exportLabel
@@ -12,16 +13,15 @@ import fsm.sample.flat.step
 import fsm.sample.flat.transition
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
-import fsm.sample.gof.ConnectionEffect
+import fsm.sample.gof.ConnectionStepEffects
 import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Transferring
-import fsm.sample.gof.connRefusal
-import fsm.sample.gof.connTransition
 import fsm.sample.gof.declaredEffects
-import fsm.sample.gof.exportLabel
 import fsm.sample.gof.planTransition
+import fsm.sample.effect.auditRefusal
+import fsm.sample.effect.auditTransition
 import fsm.sample.logging.RecordKind
 import fsm.sample.logging.TransitionLog
 import fsm.sample.orthogonal.LatchEvent
@@ -67,7 +67,7 @@ class ProductEvaluatorTest {
                 val pure = step(s, e)
                 val row = table.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(pure.next.label(), row.to)
-                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
+                assertEquals(pure.exportLabels { it.exportLabel() }, row.effects)
                 assertTrue(row.effects.contains("LogTransition"), "row=$row")
                 assertTrue(row.effects.any { it.startsWith("DriveLamp") }, "row=$row")
             }
@@ -104,7 +104,7 @@ class ProductEvaluatorTest {
                 val pure = protocol.stepOffer(s, e)
                 val row = table.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(pure.next.label(), row.to)
-                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
+                assertEquals(pure.exportLabels(), row.effects)
                 when (pure) {
                     is OfferStep.Accepted -> {
                         assertEquals(TransitionKind.ACCEPTED, row.kind)
@@ -157,7 +157,7 @@ class ProductEvaluatorTest {
             for (e in listOf(LatchEvent.Lock, LatchEvent.Unlock)) {
                 val pure = latch.step(s, e)
                 val row = latchTable.rows.single { it.from == s.label() && it.event == e.label() }
-                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
+                assertEquals(pure.exportLabels { it.exportLabel() }, row.effects)
                 assertTrue(row.effects.contains("LogTransition"))
                 assertTrue(
                     row.effects.contains("EnergizeStrike") || row.effects.contains("EngageDeadbolt"),
@@ -169,7 +169,7 @@ class ProductEvaluatorTest {
             for (e in listOf(SwingEvent.OpenDoor, SwingEvent.CloseDoor)) {
                 val pure = swing.step(s, e)
                 val row = swingTable.rows.single { it.from == s.label() && it.event == e.label() }
-                assertEquals(effectShortNames(pure.effects) { it.exportLabel() }, row.effects)
+                assertEquals(pure.exportLabels { it.exportLabel() }, row.effects)
                 if (e is SwingEvent.OpenDoor) {
                     assertTrue(row.effects.contains("SoundChime"), "row=$row")
                 }
@@ -219,30 +219,37 @@ class ProductEvaluatorTest {
         for (leaf in leaves) {
             for (event in events) {
                 val probe = probeConnection(leaf, event)
-                val expected: List<ConnectionEffect> = when (probe) {
+                val expected: ConnectionStepEffects = when (probe) {
                     is HandleResult.Handled ->
                         if (probe.next !== leaf) {
-                            planTransition(leaf, probe.next, event, probe.effects)
+                            planTransition(leaf, probe.next, event, probe.domain)
                         } else {
-                            probe.effects + connTransition(
-                                machine = "Connection",
-                                from = leaf.name,
-                                event = event.label(),
-                                to = probe.next.name,
+                            ConnectionStepEffects.of(
+                                audit = listOf(
+                                    auditTransition(
+                                        machine = "Connection",
+                                        from = leaf.name,
+                                        event = event.label(),
+                                        to = probe.next.name,
+                                    ),
+                                ),
+                                domain = probe.domain,
                             )
                         }
-                    HandleResult.Unhandled -> listOf(
-                        connRefusal(
-                            machine = "Connection",
-                            state = leaf.name,
-                            event = event.label(),
-                            reason = "no state in hierarchy accepted event",
+                    HandleResult.Unhandled -> ConnectionStepEffects.of(
+                        audit = listOf(
+                            auditRefusal(
+                                machine = "Connection",
+                                state = leaf.name,
+                                event = event.label(),
+                                reason = "no state in hierarchy accepted event",
+                            ),
                         ),
                     )
                 }
                 val row = table.rows.single { it.from == leaf.name && it.event == event.label() }
                 assertEquals(
-                    effectShortNames(expected) { it.exportLabel() },
+                    expected.exportLabels(),
                     row.effects,
                     "leaf=${leaf.name} event=${event.label()}",
                 )
@@ -251,7 +258,7 @@ class ProductEvaluatorTest {
             }
         }
 
-        // Golden lists: audit + domain session lifecycle on Online enter/exit only
+        // Golden lists: fragment LCA order (audit then domain within each fragment)
         val connect = table.rows.single { it.from == Offline.name && it.event == ConnEvent.Connect.label() }
         assertEquals(
             listOf(
@@ -273,7 +280,8 @@ class ProductEvaluatorTest {
             start.effects,
         )
 
-        // Cross-hierarchy disconnect: Transferring → Offline (CloseSession with Online exit)
+        // Cross-hierarchy disconnect: Transferring → Offline
+        // CloseSession pairs with Online exit fragment
         val disc = table.rows.single {
             it.from == Transferring.name && it.event == ConnEvent.Disconnect.label()
         }
@@ -288,9 +296,9 @@ class ProductEvaluatorTest {
             disc.effects,
         )
 
-        // Heartbeat same-leaf at Idle: IncHeartbeat + LogTransition (domain + cross-cutting)
+        // Heartbeat same-leaf at Idle: one fragment audit then domain
         val hb = table.rows.single { it.from == Idle.name && it.event == ConnEvent.Heartbeat.label() }
-        assertEquals(listOf("IncHeartbeat", "LogTransition"), hb.effects)
+        assertEquals(listOf("LogTransition", "IncHeartbeat"), hb.effects)
 
         // Unhandled: LogRefusal only
         val refuse = table.rows.single {
@@ -306,7 +314,7 @@ class ProductEvaluatorTest {
         val live = ConnectionContext(log = externalLog)
         val logSizeAfterInit = externalLog.snapshot().size
         assertTrue(logSizeAfterInit > 0) // init entry applied on the *live* context only
-        assertEquals(0, live.heartbeatCount)
+        assertEquals(0, live.port.heartbeats)
 
         evaluateTrafficLight()
         evaluateFileProtocol()
@@ -316,17 +324,17 @@ class ProductEvaluatorTest {
 
         // Export must not append to a live context's log or bump its counter.
         assertEquals(logSizeAfterInit, externalLog.snapshot().size, "export must not write shared TransitionLog")
-        assertEquals(0, live.heartbeatCount, "export must not apply IncHeartbeat on a live context")
+        assertEquals(0, live.port.heartbeats, "export must not apply IncHeartbeat on a live context")
         assertTrue(externalLog.snapshot().all { it.kind == RecordKind.ENTRY })
 
         // Product still declares IncHeartbeat for Heartbeat rows (labels only).
         val hb = connTable.rows.single { it.from == Idle.name && it.event == ConnEvent.Heartbeat.label() }
         assertTrue(hb.effects.contains("IncHeartbeat"))
 
-        // Probe contexts use applyInitialEntry=false: pure plan without interpreter.
-        val probeCtx = ConnectionContext(initial = Idle, log = TransitionLog(), applyInitialEntry = false)
-        assertTrue(probeCtx.log!!.snapshot().isEmpty(), "probe construction must not apply enter effects")
-        assertEquals(0, probeCtx.heartbeatCount)
+        // Pure probe: no ConnectionContext construction, no interpreter side effects.
+        val probe = probeConnection(Idle, ConnEvent.Heartbeat)
+        assertTrue(probe is HandleResult.Handled)
+        assertEquals(0, live.port.heartbeats)
     }
 
     @Test

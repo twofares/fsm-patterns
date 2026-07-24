@@ -1,5 +1,10 @@
 package fsm.sample.csp
 
+import fsm.sample.effect.AuditEffect
+import fsm.sample.effect.AuditInterpreter
+import fsm.sample.effect.auditRefusal
+import fsm.sample.effect.auditTransition
+import fsm.sample.effect.exportLabel
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -10,10 +15,10 @@ import fsm.sample.logging.TransitionLog
  * The portable encoding used here:
  * - Explicit event alphabet for the whole process
  * - Per-state "menu" (acceptance set): only events in the menu are offered
- * - Refusal of non-menu events (declared as [FileEffect] audit refusal, state unchanged)
+ * - Refusal of non-menu events (plain [AuditEffect] refusal, state unchanged)
  * - Prefix / choice encoded as pure State + Event → State when accepted
- * - Pure [stepOffer] returns sealed [OfferStep] (control outcome + [FileEffect]s);
- *   boundary [offer] assigns + [interpretFile] without scanning log vocabulary
+ * - Pure [stepOffer] returns sealed [OfferStep] (control + split audit/domain);
+ *   boundary [offer] assigns + applies audit/domain without scanning log vocabulary
  *
  * Domain vignette: a tiny file protocol process
  *   Closed --Open--> Opened --Read--> Opened --Close--> Closed
@@ -54,26 +59,36 @@ sealed class OfferResult {
 }
 
 /**
- * PURPOSE: Pure CSP offer step outcome — control flow separate from log effects.
+ * PURPOSE: Pure CSP offer step outcome — control flow separate from dual sinks.
  *
- * [Accepted] / [Refused] arms carry [FileEffect]s for the boundary; [next] is always
- * defined (refusal keeps prior state). Logging vocabulary stays observational
- * and is not used to classify accept vs refuse at the boundary.
+ * [Accepted] carries split [audit] + [domain]; [Refused] is **audit-only** (no domain
+ * field — refuse cannot declare I/O intents). [next] is always defined (refusal keeps
+ * prior state). Logging vocabulary stays observational and is not used to classify
+ * accept vs refuse at the boundary.
  */
 sealed class OfferStep {
     abstract val next: FileState
-    abstract val effects: List<FileEffect>
+    abstract val audit: List<AuditEffect>
 
     data class Accepted(
         override val next: FileState,
-        override val effects: List<FileEffect>,
+        override val audit: List<AuditEffect>,
+        val domain: List<FileEffect>,
     ) : OfferStep()
 
     data class Refused(
         val reason: String,
         override val next: FileState,
-        override val effects: List<FileEffect>,
+        override val audit: List<AuditEffect>,
     ) : OfferStep()
+}
+
+/** PURPOSE: Ordered export labels — Accepted: audit then domain; Refused: audit only. */
+fun OfferStep.exportLabels(): List<String> = when (this) {
+    is OfferStep.Accepted ->
+        audit.map { it.exportLabel() } + domain.map { it.exportLabel() }
+    is OfferStep.Refused ->
+        audit.map { it.exportLabel() }
 }
 
 /**
@@ -81,8 +96,8 @@ sealed class OfferStep {
  *
  * [alphabet] is the process-wide event set.
  * [menu] is the currently offered events (state-dependent acceptance).
- * [stepOffer] is pure: sealed [OfferStep] with next + [FileEffect]s.
- * [offer] is the boundary: assign state + [interpretFile].
+ * [stepOffer] is pure: sealed [OfferStep] with next + split audit/domain.
+ * [offer] is the boundary: assign state + apply audit/domain.
  */
 class FileProtocol(
     initial: FileState = FileState.Closed,
@@ -129,8 +144,8 @@ class FileProtocol(
     }
 
     /**
-     * PURPOSE: Pure CSP offer step — sealed control outcome + declared [FileEffect]s.
-     * Does not mutate [current] or touch the log; tests assert [OfferStep.effects].
+     * PURPOSE: Pure CSP offer step — sealed control outcome + split audit/domain.
+     * Does not mutate [current] or touch log/port; tests assert [OfferStep] lists.
      */
     fun stepOffer(
         state: FileState,
@@ -141,8 +156,8 @@ class FileProtocol(
             return OfferStep.Refused(
                 reason = reason,
                 next = state,
-                effects = listOf(
-                    fileRefusal(machineName, state.label(), event.label(), reason),
+                audit = listOf(
+                    auditRefusal(machineName, state.label(), event.label(), reason),
                 ),
             )
         }
@@ -153,8 +168,8 @@ class FileProtocol(
             return OfferStep.Refused(
                 reason = reason,
                 next = state,
-                effects = listOf(
-                    fileRefusal(machineName, state.label(), event.label(), reason),
+                audit = listOf(
+                    auditRefusal(machineName, state.label(), event.label(), reason),
                 ),
             )
         }
@@ -167,30 +182,36 @@ class FileProtocol(
         }
         return OfferStep.Accepted(
             next = next,
-            effects = listOf(
-                fileTransition(
+            audit = listOf(
+                auditTransition(
                     machine = machineName,
                     from = state.label(),
                     event = event.label(),
                     to = next.label(),
                 ),
-                domain,
             ),
+            domain = listOf(domain),
         )
     }
 
     /**
-     * PURPOSE: Offer an event (CSP engagement). Boundary: assign + interpret.
-     * Maps sealed [OfferStep] to [OfferResult] without scanning effect types.
-     * Refuse paths apply audit only (no domain ops on [port]).
+     * PURPOSE: Offer an event (CSP engagement). Boundary: assign + apply sinks.
+     * Maps sealed [OfferStep] to [OfferResult] without scanning log vocabulary.
+     * Accept applies audit + domain; refuse applies audit only (no domain field).
      */
     fun offer(event: FileEvent): OfferResult {
-        val result = stepOffer(current, event)
-        current = result.next
-        interpretFile(result.effects, log, port)
-        return when (result) {
-            is OfferStep.Accepted -> OfferResult.Accepted(result.next)
-            is OfferStep.Refused -> OfferResult.Refused(result.reason)
+        return when (val result = stepOffer(current, event)) {
+            is OfferStep.Accepted -> {
+                current = result.next
+                AuditInterpreter.apply(result.audit, log)
+                applyDomainFile(result.domain, port)
+                OfferResult.Accepted(result.next)
+            }
+            is OfferStep.Refused -> {
+                current = result.next
+                AuditInterpreter.apply(result.audit, log)
+                OfferResult.Refused(result.reason)
+            }
         }
     }
 }

@@ -69,12 +69,12 @@ stateDiagram-v2
 | Idle | Disconnect | Offline | ACCEPTED | LogExit(Idle), LogExit(Online), CloseSession, LogTransition, LogEntry(Offline) |  |
 | Idle | StartTransfer | Transferring | ACCEPTED | LogExit(Idle), LogTransition, LogEntry(Transferring) |  |
 | Idle | FinishTransfer | Idle | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Idle | Heartbeat | Idle | ACCEPTED | IncHeartbeat, LogTransition |  |
+| Idle | Heartbeat | Idle | ACCEPTED | LogTransition, IncHeartbeat |  |
 | Transferring | Connect | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Transferring | Disconnect | Offline | ACCEPTED | LogExit(Transferring), LogExit(Online), CloseSession, LogTransition, LogEntry(Offline) |  |
 | Transferring | StartTransfer | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
 | Transferring | FinishTransfer | Idle | ACCEPTED | LogExit(Transferring), LogTransition, LogEntry(Idle) |  |
-| Transferring | Heartbeat | Transferring | ACCEPTED | IncHeartbeat, LogTransition |  |
+| Transferring | Heartbeat | Transferring | ACCEPTED | LogTransition, IncHeartbeat |  |
 
 ```mermaid
 stateDiagram-v2

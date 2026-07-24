@@ -1,28 +1,22 @@
 package fsm.sample.flat
 
-import fsm.sample.effect.AuditEffect
-import fsm.sample.effect.AuditInterpreter
-import fsm.sample.effect.auditTransition
-import fsm.sample.effect.exportLabel
-import fsm.sample.logging.TransitionLog
-
 /**
- * PURPOSE: TrafficLight **domain** effect ADT — teaches domain vs cross-cutting.
+ * PURPOSE: TrafficLight **domain** effect ADT — hardware intents only.
  *
- * - [Audit]: **cross-cutting** observability ([AuditEffect] → [TransitionLog])
- * - [DriveLamp]: **domain-specific** hardware command (drive the signal lamp).
- *   Only this machine declares it; Connection/File/Door cannot emit DriveLamp.
+ * Cross-cutting audit is a separate `List<AuditEffect>` on [fsm.sample.effect.StepResult],
+ * not nested here. Domain case:
+ * - [DriveLamp]: drive the signal lamp (this machine only).
  *
- * Pure [step] declares both on every color change; [interpretLight] splits sinks:
- * audit → log, domain → [LightPort].
+ * Pure [step] declares audit + domain; boundary applies audit → log, domain → [LightPort].
+ *
+ * Domain policy (total / engagement-driven): [DriveLamp] is declared for every accepted
+ * step, including self-loops (e.g. Emergency when already Red). Domain tracks the
+ * engagement, not only identity changes of state.
  */
 sealed class LightEffect {
-    /** Cross-cutting audit wrapper. */
-    data class Audit(val audit: AuditEffect) : LightEffect()
-
     /**
      * Domain-only: drive the physical (or simulated) lamp to [colorLabel].
-     * Declared by pure steps; applied only via [interpretLight] → [LightPort].
+     * Declared by pure steps; applied only via [applyDomainLight] → [LightPort].
      */
     data class DriveLamp(val colorLabel: String) : LightEffect()
 }
@@ -43,33 +37,19 @@ class LightPort {
     fun snapshot(): String = "lampCommands=$commands"
 }
 
-/** PURPOSE: Declare a light transition audit without nesting constructors at call sites. */
-fun lightTransition(
-    machine: String,
-    from: String,
-    event: String,
-    to: String,
-): LightEffect = LightEffect.Audit(auditTransition(machine, from, event, to))
-
 /**
- * PURPOSE: Local boundary for TrafficLight.
- * Cross-cutting audit → [log]; domain [DriveLamp] → [port].
+ * PURPOSE: Local domain boundary for TrafficLight.
+ * Domain [DriveLamp] → [port]. Audit is applied separately via [AuditInterpreter].
  */
-fun interpretLight(
-    effects: List<LightEffect>,
-    log: TransitionLog? = null,
-    port: LightPort? = null,
-) {
-    for (effect in effects) {
+fun applyDomainLight(domain: List<LightEffect>, port: LightPort) {
+    for (effect in domain) {
         when (effect) {
-            is LightEffect.Audit -> AuditInterpreter.applyOne(effect.audit, log)
-            is LightEffect.DriveLamp -> port?.drive(effect.colorLabel)
+            is LightEffect.DriveLamp -> port.drive(effect.colorLabel)
         }
     }
 }
 
 /** PURPOSE: Export short name (pure label for Effects column). */
 fun LightEffect.exportLabel(): String = when (this) {
-    is LightEffect.Audit -> audit.exportLabel()
     is LightEffect.DriveLamp -> "DriveLamp($colorLabel)"
 }

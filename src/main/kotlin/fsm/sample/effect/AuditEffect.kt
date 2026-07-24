@@ -5,13 +5,11 @@ package fsm.sample.effect
  *
  * Not a domain effect algebra — only the observability shape that every sample
  * machine records into [fsm.sample.logging.TransitionLog] (transition / entry /
- * exit / refusal). Machines wrap these in their own sealed ADTs (or use them
- * via local interpreters) so domain-only effects (e.g. Connection heartbeat)
- * stay out of a global god type.
+ * exit / refusal). Carried as a plain `List<AuditEffect>` on [StepResult] and
+ * machine-local assemblies; domain ADTs never wrap these.
  *
- * Pure steps *declare* [AuditEffect] values; [AuditInterpreter.applyOne]
- * applies them at boundaries (via per-machine interpreters). Export labels
- * come from [exportLabel] without I/O.
+ * Pure steps *declare* [AuditEffect] values; [AuditInterpreter.apply] applies
+ * them at boundaries. Export labels come from [exportLabel] without I/O.
  */
 sealed class AuditEffect {
     /** Record a successful mode change (from --event--> to). */

@@ -1,10 +1,10 @@
 package fsm.sample
 
 import fsm.sample.csp.FileEvent
-import fsm.sample.csp.FileEffect
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
-import fsm.sample.csp.exportLabel
+import fsm.sample.csp.exportLabels
+import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
 import fsm.sample.flat.TrafficLight
@@ -20,7 +20,7 @@ import fsm.sample.orthogonal.DoorSystem
  * PURPOSE: Demo of **cross-cutting audit** vs **domain-specific** effects.
  *
  * For each vignette:
- * 1. Pure effect list (declare only)
+ * 1. Pure effect lists (declare only — audit + domain split)
  * 2. After boundary: TransitionLog (cross-cutting sink)
  * 3. Domain port snapshot (machine-local sink)
  *
@@ -39,7 +39,7 @@ fun main() {
     // --- 1. TrafficLight -----------------------------------------------------
     line("--- TrafficLight: Audit (cross-cutting) + DriveLamp (domain) ---")
     val pureStep = step(LightState.Red, LightEvent.Tick)
-    line("pure step effects: ${pureStep.effects.map { it.exportLabel() }}")
+    line("pure step labels: ${pureStep.exportLabels { it.exportLabel() }}")
     val flatLog = TransitionLog()
     val light = TrafficLight(log = flatLog)
     light.handle(LightEvent.Tick)
@@ -61,7 +61,7 @@ fun main() {
     conn.handle(ConnEvent.FinishTransfer)
     conn.handle(ConnEvent.Disconnect)
     conn.handle(ConnEvent.StartTransfer) // refuse
-    line("final=${conn.current.name} heartbeats=${conn.heartbeatCount}")
+    line("final=${conn.current.name} heartbeats=${conn.port.heartbeats}")
     line("AUDIT log:")
     line(connLog.formatAll())
     line("DOMAIN port: ${conn.port.snapshot()}")
@@ -89,7 +89,7 @@ fun main() {
     val file = FileProtocol(log = cspLog)
     val refused = file.stepOffer(FileState.Closed, FileEvent.Read)
     line(
-        "pure refuse effects (no domain I/O): ${refused.effects.map { it.exportLabel() }}",
+        "pure refuse labels (no domain I/O): ${refused.exportLabels()}",
     )
     file.offer(FileEvent.Read)
     line("after refuse offer: domain ${file.port.snapshot()}")
