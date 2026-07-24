@@ -10,12 +10,12 @@ Stdlib only — no FSM/statechart engines.
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Red | Tick | Green | ACCEPTED | LogTransition, DriveLamp(Green) |  |
-| Red | Emergency | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
-| Green | Tick | Yellow | ACCEPTED | LogTransition, DriveLamp(Yellow) |  |
-| Green | Emergency | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
-| Yellow | Tick | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
-| Yellow | Emergency | Red | ACCEPTED | LogTransition, DriveLamp(Red) |  |
+| Red | Tick | Green | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), DriveLamp(Green) |  |
+| Red | Emergency | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,forced Red), DriveLamp(Red) |  |
+| Green | Tick | Yellow | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), DriveLamp(Yellow) |  |
+| Green | Emergency | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,forced Red), DriveLamp(Red) |  |
+| Yellow | Tick | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), DriveLamp(Red) |  |
+| Yellow | Emergency | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,forced Red), DriveLamp(Red) |  |
 
 ```mermaid
 stateDiagram-v2
@@ -37,12 +37,12 @@ stateDiagram-v2
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Closed | Open | Opened | ACCEPTED | LogTransition, OpenHandle |  |
-| Closed | Read | Closed | REFUSED | LogRefusal | not in menu |
-| Closed | Close | Closed | REFUSED | LogRefusal | not in menu |
-| Opened | Open | Opened | REFUSED | LogRefusal | not in menu |
-| Opened | Read | Opened | ACCEPTED | LogTransition, ReadChunk |  |
-| Opened | Close | Closed | ACCEPTED | LogTransition, CloseHandle |  |
+| Closed | Open | Opened | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(csp.accept), OpenHandle |  |
+| Closed | Read | Closed | REFUSED | Audit.LogRefusal, Metric.Inc(csp.refuse), Trace.Span(csp.refuse,event not in current menu [Open]; refused) | not in menu |
+| Closed | Close | Closed | REFUSED | Audit.LogRefusal, Metric.Inc(csp.refuse), Trace.Span(csp.refuse,event not in current menu [Open]; refused) | not in menu |
+| Opened | Open | Opened | REFUSED | Audit.LogRefusal, Metric.Inc(csp.refuse), Trace.Span(csp.refuse,event not in current menu [Read, Close]; refused) | not in menu |
+| Opened | Read | Opened | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(csp.accept), ReadChunk |  |
+| Opened | Close | Closed | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(csp.accept), CloseHandle |  |
 
 ```mermaid
 stateDiagram-v2
@@ -60,21 +60,21 @@ stateDiagram-v2
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Offline | Connect | Idle | ACCEPTED | LogExit(Offline), LogTransition, LogEntry(Online), OpenSession, LogEntry(Idle) |  |
-| Offline | Disconnect | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Offline | StartTransfer | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Offline | FinishTransfer | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Offline | Heartbeat | Offline | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Idle | Connect | Idle | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Idle | Disconnect | Offline | ACCEPTED | LogExit(Idle), LogExit(Online), CloseSession, LogTransition, LogEntry(Offline) |  |
-| Idle | StartTransfer | Transferring | ACCEPTED | LogExit(Idle), LogTransition, LogEntry(Transferring) |  |
-| Idle | FinishTransfer | Idle | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Idle | Heartbeat | Idle | ACCEPTED | LogTransition, IncHeartbeat |  |
-| Transferring | Connect | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Transferring | Disconnect | Offline | ACCEPTED | LogExit(Transferring), LogExit(Online), CloseSession, LogTransition, LogEntry(Offline) |  |
-| Transferring | StartTransfer | Transferring | REFUSED | LogRefusal | no state in hierarchy accepted event |
-| Transferring | FinishTransfer | Idle | ACCEPTED | LogExit(Transferring), LogTransition, LogEntry(Idle) |  |
-| Transferring | Heartbeat | Transferring | ACCEPTED | LogTransition, IncHeartbeat |  |
+| Offline | Connect | Idle | ACCEPTED | Audit.LogExit(Offline), Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Online), Metric.Inc(connection.session.open), Trace.Span(connection.session,open), OpenSession, Audit.LogEntry(Idle) |  |
+| Offline | Disconnect | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Disconnect) | no state in hierarchy accepted event |
+| Offline | StartTransfer | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,StartTransfer) | no state in hierarchy accepted event |
+| Offline | FinishTransfer | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,FinishTransfer) | no state in hierarchy accepted event |
+| Offline | Heartbeat | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Heartbeat) | no state in hierarchy accepted event |
+| Idle | Connect | Idle | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Connect) | no state in hierarchy accepted event |
+| Idle | Disconnect | Offline | ACCEPTED | Audit.LogExit(Idle), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
+| Idle | StartTransfer | Transferring | ACCEPTED | Audit.LogExit(Idle), Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Transferring) |  |
+| Idle | FinishTransfer | Idle | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,FinishTransfer) | no state in hierarchy accepted event |
+| Idle | Heartbeat | Idle | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(connection.heartbeat), IncHeartbeat |  |
+| Transferring | Connect | Transferring | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Connect) | no state in hierarchy accepted event |
+| Transferring | Disconnect | Offline | ACCEPTED | Audit.LogExit(Transferring), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
+| Transferring | StartTransfer | Transferring | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,StartTransfer) | no state in hierarchy accepted event |
+| Transferring | FinishTransfer | Idle | ACCEPTED | Audit.LogExit(Transferring), Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Idle) |  |
+| Transferring | Heartbeat | Transferring | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(connection.heartbeat), IncHeartbeat |  |
 
 ```mermaid
 stateDiagram-v2
@@ -100,32 +100,32 @@ stateDiagram-v2
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Locked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt | region=Latch |
-| Locked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike | region=Latch |
-| Unlocked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt | region=Latch |
-| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike | region=Latch |
-| Closed | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime | region=Swing |
-| Closed | CloseDoor | Closed | ACCEPTED | LogTransition | region=Swing |
-| Open | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime | region=Swing |
-| Open | CloseDoor | Closed | ACCEPTED | LogTransition | region=Swing |
+| Locked | Lock | Locked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.lock), EngageDeadbolt | region=Latch |
+| Locked | Unlock | Unlocked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.unlock), EnergizeStrike | region=Latch |
+| Unlocked | Lock | Locked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.lock), EngageDeadbolt | region=Latch |
+| Unlocked | Unlock | Unlocked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.unlock), EnergizeStrike | region=Latch |
+| Closed | OpenDoor | Open | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.swing.open), SoundChime | region=Swing |
+| Closed | CloseDoor | Closed | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions) | region=Swing |
+| Open | OpenDoor | Open | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.swing.open), SoundChime | region=Swing |
+| Open | CloseDoor | Closed | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions) | region=Swing |
 
 ### Latch transition table
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Locked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt |  |
-| Locked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike |  |
-| Unlocked | Lock | Locked | ACCEPTED | LogTransition, EngageDeadbolt |  |
-| Unlocked | Unlock | Unlocked | ACCEPTED | LogTransition, EnergizeStrike |  |
+| Locked | Lock | Locked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.lock), EngageDeadbolt |  |
+| Locked | Unlock | Unlocked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.unlock), EnergizeStrike |  |
+| Unlocked | Lock | Locked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.lock), EngageDeadbolt |  |
+| Unlocked | Unlock | Unlocked | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.latch.unlock), EnergizeStrike |  |
 
 ### Swing transition table
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Closed | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime |  |
-| Closed | CloseDoor | Closed | ACCEPTED | LogTransition |  |
-| Open | OpenDoor | Open | ACCEPTED | LogTransition, SoundChime |  |
-| Open | CloseDoor | Closed | ACCEPTED | LogTransition |  |
+| Closed | OpenDoor | Open | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.swing.open), SoundChime |  |
+| Closed | CloseDoor | Closed | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions) |  |
+| Open | OpenDoor | Open | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(door.swing.open), SoundChime |  |
+| Open | CloseDoor | Closed | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions) |  |
 
 ```mermaid
 stateDiagram-v2

@@ -1,27 +1,26 @@
 package fsm.sample.effect
 
 /**
- * PURPOSE: Generic pure step outcome — successor state plus **split** sinks.
+ * PURPOSE: Generic pure step outcome — successor + **split** sinks.
  *
- * Cross-cutting observability is always [audit] ([AuditEffect] → [TransitionLog]).
- * Domain work is always [domain] (machine-local sealed ADT → machine port).
+ * - [crossCutting]: shared multi-family effects ([CrossCuttingEffect] → [CrossCuttingEnv])
+ * - [domain]: machine-local sealed ADT → machine port
  *
- * No nested `Audit` wrappers on domain ADTs: dual sinks stay separate lists.
- * Pure steps only declare; boundaries call [AuditInterpreter.apply] + applyDomain.
- * Export labels = audit labels + domain labels (no interpreter, no interleaving).
+ * Cross-cutting is **not** audit-only: audit, metrics, and tracing all share
+ * [crossCutting]. Domain ADTs never nest cross-cutting cases.
  *
- * [next] is always defined (refusal steps keep the prior state as next).
- * Empty lists mean nothing for that sink at the boundary.
+ * Pure steps only declare; boundaries call [CrossCuttingInterpreter.apply] + applyDomain.
+ * Export labels = cross-cutting labels + domain labels.
  */
 data class StepResult<S, D>(
     val next: S,
-    val audit: List<AuditEffect> = emptyList(),
+    val crossCutting: List<CrossCuttingEffect> = emptyList(),
     val domain: List<D> = emptyList(),
 )
 
 /**
- * PURPOSE: Ordered export labels for a pure step (audit first, then domain).
+ * PURPOSE: Ordered export labels (cross-cutting first, then domain).
  * Pure mapping only — not an interpreter.
  */
 fun <D> StepResult<*, D>.exportLabels(domainLabel: (D) -> String): List<String> =
-    audit.map { it.exportLabel() } + domain.map(domainLabel)
+    crossCutting.map { it.exportLabel() } + domain.map(domainLabel)

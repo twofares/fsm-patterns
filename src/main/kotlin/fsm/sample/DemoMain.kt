@@ -12,95 +12,80 @@ import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
-import fsm.sample.logging.TransitionLog
 import fsm.sample.orthogonal.DoorEvent
 import fsm.sample.orthogonal.DoorSystem
 
 /**
- * PURPOSE: Demo of **cross-cutting audit** vs **domain-specific** effects.
+ * PURPOSE: Demo of **generalized cross-cutting** (audit + metrics + trace) vs **domain**.
  *
- * For each vignette:
- * 1. Pure effect lists (declare only — audit + domain split)
- * 2. After boundary: TransitionLog (cross-cutting sink)
- * 3. Domain port snapshot (machine-local sink)
+ * Cross-cutting families share [CrossCuttingEnv] sinks:
+ * - Audit → TransitionLog
+ * - Metric → MetricsPort
+ * - Trace → TracePort
  *
- * Cross-cutting: AuditEffect → same log record format for all machines.
- * Domain: DriveLamp, OpenHandle/ReadChunk/CloseHandle, OpenSession/CloseSession/
- * IncHeartbeat, EnergizeStrike/EngageDeadbolt/SoundChime — never on foreign ADTs.
+ * Domain stays on machine ports (lamp, file ops, session, door actuators).
  */
 fun main() {
     fun line(s: String = "") {
         println(s)
     }
 
-    line("=== Domain-specific vs cross-cutting effects (no libraries/engines) ===")
+    line("=== Cross-cutting (multi-family) vs domain-specific effects ===")
     line()
 
-    // --- 1. TrafficLight -----------------------------------------------------
-    line("--- TrafficLight: Audit (cross-cutting) + DriveLamp (domain) ---")
+    line("--- TrafficLight: Audit + Metric(+Trace on Emergency) + DriveLamp ---")
     val pureStep = step(LightState.Red, LightEvent.Tick)
     line("pure step labels: ${pureStep.exportLabels { it.exportLabel() }}")
-    val flatLog = TransitionLog()
-    val light = TrafficLight(log = flatLog)
-    light.handle(LightEvent.Tick)
+    val light = TrafficLight()
     light.handle(LightEvent.Tick)
     light.handle(LightEvent.Emergency)
     line("final=${light.current.label()}")
-    line("AUDIT log:")
-    line(flatLog.formatAll())
+    line("CROSS-CUTTING audit log:")
+    line(light.crossCutting.log.formatAll())
+    line("CROSS-CUTTING ${light.crossCutting.snapshot()}")
     line("DOMAIN port: ${light.port.snapshot()}")
     line()
 
-    // --- 2. Connection -------------------------------------------------------
-    line("--- Connection: Audit + OpenSession/CloseSession/IncHeartbeat (domain) ---")
-    val connLog = TransitionLog()
-    val conn = ConnectionContext(log = connLog)
+    line("--- Connection: multi-family CC on session open/close + domain session/heartbeat ---")
+    val conn = ConnectionContext()
     conn.handle(ConnEvent.Connect)
     conn.handle(ConnEvent.Heartbeat)
-    conn.handle(ConnEvent.StartTransfer)
-    conn.handle(ConnEvent.FinishTransfer)
     conn.handle(ConnEvent.Disconnect)
-    conn.handle(ConnEvent.StartTransfer) // refuse
     line("final=${conn.current.name} heartbeats=${conn.port.heartbeats}")
-    line("AUDIT log:")
-    line(connLog.formatAll())
+    line("CROSS-CUTTING audit log:")
+    line(conn.crossCutting.log.formatAll())
+    line("CROSS-CUTTING ${conn.crossCutting.snapshot()}")
     line("DOMAIN port: ${conn.port.snapshot()}")
     line()
 
-    // --- 3. Door (orthogonal) ------------------------------------------------
-    line("--- Door: region actuators (domain); guard refusals audit-only ---")
+    line("--- Door: refuse → Audit+Metric+Trace (no domain); unlock/open → actuators ---")
     val door = DoorSystem()
-    door.handle(DoorEvent.Open) // refuse locked — audit only
-    line("after refused Open: domain ${door.port.snapshot()}")
+    door.handle(DoorEvent.Open)
+    line("after refused Open: domain ${door.port.snapshot()}; CC ${door.crossCutting.snapshot()}")
     door.handle(DoorEvent.Unlock)
     door.handle(DoorEvent.Open)
-    door.handle(DoorEvent.Lock) // refuse open
-    door.handle(DoorEvent.Close)
-    door.handle(DoorEvent.Lock)
     line("final=${door.configuration()}")
-    line("AUDIT log:")
-    line(door.log.formatAll())
+    line("CROSS-CUTTING audit log:")
+    line(door.crossCutting.log.formatAll())
+    line("CROSS-CUTTING ${door.crossCutting.snapshot()}")
     line("DOMAIN port: ${door.port.snapshot()}")
     line()
 
-    // --- 4. FileProtocol (CSP) -----------------------------------------------
-    line("--- FileProtocol: accept → OpenHandle/ReadChunk/CloseHandle; refuse → audit only ---")
-    val cspLog = TransitionLog()
-    val file = FileProtocol(log = cspLog)
+    line("--- FileProtocol: accept metrics; refuse Metric+Trace (no domain I/O) ---")
+    val file = FileProtocol()
     val refused = file.stepOffer(FileState.Closed, FileEvent.Read)
-    line(
-        "pure refuse labels (no domain I/O): ${refused.exportLabels()}",
-    )
+    line("pure refuse labels: ${refused.exportLabels()}")
     file.offer(FileEvent.Read)
-    line("after refuse offer: domain ${file.port.snapshot()}")
+    line("after refuse: domain ${file.port.snapshot()}; CC ${file.crossCutting.snapshot()}")
     file.offer(FileEvent.Open)
     file.offer(FileEvent.Read)
     file.offer(FileEvent.Close)
     line("final=${file.current.label()}")
-    line("AUDIT log:")
-    line(cspLog.formatAll())
+    line("CROSS-CUTTING audit log:")
+    line(file.crossCutting.log.formatAll())
+    line("CROSS-CUTTING ${file.crossCutting.snapshot()}")
     line("DOMAIN port: ${file.port.snapshot()}")
     line()
 
-    line("=== Demo complete: dual sinks (audit log vs domain ports) ===")
+    line("=== Demo complete: multi-family cross-cutting + domain ports ===")
 }

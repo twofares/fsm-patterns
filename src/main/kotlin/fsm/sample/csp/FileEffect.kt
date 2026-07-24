@@ -3,7 +3,7 @@ package fsm.sample.csp
 /**
  * PURPOSE: FileProtocol **domain** effect ADT — I/O intents only (no audit wrappers).
  *
- * Cross-cutting accept/refuse audit is a plain `List<AuditEffect>` on [OfferStep].
+ * Cross-cutting accept/refuse (audit / metrics / trace) is `List<CrossCuttingEffect>` on [OfferStep].
  * Domain-specific (only when accepted — refuse is audit-only):
  * - [OpenHandle] / [ReadChunk] / [CloseHandle] → [FilePort] ops
  *
@@ -49,7 +49,7 @@ class FilePort {
 
 /**
  * PURPOSE: Local domain boundary — I/O intents → [FilePort].
- * Audit is applied separately via [fsm.sample.effect.AuditInterpreter].
+ * Cross-cutting is applied separately via [fsm.sample.effect.CrossCuttingInterpreter].
  */
 fun applyDomainFile(domain: List<FileEffect>, port: FilePort) {
     for (effect in domain) {

@@ -3,7 +3,7 @@ package fsm.sample.gof
 /**
  * PURPOSE: Connection **domain** effect ADT — session/heartbeat intents only.
  *
- * Cross-cutting audit is a plain `List<AuditEffect>` assembled by [planTransition]
+ * Cross-cutting is a plain `List<CrossCuttingEffect>` assembled by [planTransition]
  * / [declaredEffects], not nested here.
  *
  * Domain-specific (this machine only):

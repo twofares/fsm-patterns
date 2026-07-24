@@ -1,7 +1,7 @@
 package fsm.sample.flat
 
 import fsm.sample.logging.RecordKind
-import fsm.sample.logging.TransitionLog
+import fsm.sample.effect.CrossCuttingEnv
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -28,8 +28,8 @@ class TrafficLightTest {
 
     @Test
     fun `TrafficLight handle applies pure transition and logs mode changes`() {
-        val log = TransitionLog()
-        val light = TrafficLight(initial = LightState.Red, log = log)
+        val env = CrossCuttingEnv()
+        val light = TrafficLight(initial = LightState.Red, crossCutting = env)
 
         val afterTick = light.handle(LightEvent.Tick)
         assertEquals(LightState.Green, afterTick)
@@ -41,7 +41,7 @@ class TrafficLightTest {
         light.handle(LightEvent.Emergency)
         assertEquals(LightState.Red, light.current)
 
-        val transitions = log.snapshot().filter { it.kind == RecordKind.TRANSITION }
+        val transitions = env.log.snapshot().filter { it.kind == RecordKind.TRANSITION }
         assertEquals(3, transitions.size)
         assertEquals("Red", transitions[0].from)
         assertEquals("Tick", transitions[0].event)
@@ -49,6 +49,6 @@ class TrafficLightTest {
         assertEquals("Yellow", transitions[1].to)
         assertEquals("Emergency", transitions[2].event)
         assertEquals("Red", transitions[2].to)
-        assertTrue(log.formatAll().contains("TRANSITION"))
+        assertTrue(env.log.formatAll().contains("TRANSITION"))
     }
 }

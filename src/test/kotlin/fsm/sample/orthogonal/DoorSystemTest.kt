@@ -26,7 +26,7 @@ class DoorSystemTest {
         assertEquals(LatchState.Unlocked, door.latch.current)
         assertEquals(SwingState.Open, door.swing.current)
 
-        val transitions = door.log.snapshot().filter { it.kind == RecordKind.TRANSITION }
+        val transitions = door.crossCutting.log.snapshot().filter { it.kind == RecordKind.TRANSITION }
         assertTrue(transitions.any { it.machine == "Latch" && it.to == "Unlocked" })
         assertTrue(transitions.any { it.machine == "Swing" && it.to == "Open" })
     }
@@ -38,7 +38,7 @@ class DoorSystemTest {
         assertEquals(SwingState.Closed, door.swing.current)
         assertEquals(LatchState.Locked, door.latch.current)
         assertTrue(
-            door.log.snapshot().any {
+            door.crossCutting.log.snapshot().any {
                 it.kind == RecordKind.REFUSAL && it.detail?.contains("locked") == true
             },
         )

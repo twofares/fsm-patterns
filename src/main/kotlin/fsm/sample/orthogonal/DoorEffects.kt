@@ -3,7 +3,7 @@ package fsm.sample.orthogonal
 /**
  * PURPOSE: Orthogonal door **domain** effects — region actuators only.
  *
- * Cross-cutting audit is a plain `List<AuditEffect>` on [fsm.sample.effect.StepResult]
+ * Cross-cutting is a plain `List<CrossCuttingEffect>` on [fsm.sample.effect.StepResult]
  * (regions) or container guard refusals — never nested on these ADTs.
  *
  * Domain-specific (region success; container refusals are audit-only):
@@ -12,7 +12,7 @@ package fsm.sample.orthogonal
  * - [SwingEffect.SoundChime] on OpenDoor engagement
  *
  * Shared [DoorPort] collects actuators for the whole door system.
- * No thin `DoorEffect` ADT: guard refusals return `List<AuditEffect>` directly.
+ * No thin `DoorEffect` ADT: guard refusals return `List<CrossCuttingEffect>` directly.
  *
  * Domain policy (total / engagement-driven): actuators fire for every accepted
  * region engagement, including self-loops (e.g. Lock while already Locked).
@@ -54,7 +54,7 @@ sealed class LatchEffect {
 
 /**
  * PURPOSE: Local domain boundary for Latch.
- * Audit is applied separately via [fsm.sample.effect.AuditInterpreter].
+ * Cross-cutting is applied separately via [fsm.sample.effect.CrossCuttingInterpreter].
  */
 fun applyDomainLatch(domain: List<LatchEffect>, port: DoorPort) {
     for (effect in domain) {
@@ -79,7 +79,7 @@ sealed class SwingEffect {
 
 /**
  * PURPOSE: Local domain boundary for Swing.
- * Audit is applied separately via [fsm.sample.effect.AuditInterpreter].
+ * Cross-cutting is applied separately via [fsm.sample.effect.CrossCuttingInterpreter].
  */
 fun applyDomainSwing(domain: List<SwingEffect>, port: DoorPort) {
     for (effect in domain) {

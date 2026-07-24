@@ -1,7 +1,7 @@
 package fsm.sample.csp
 
 import fsm.sample.logging.RecordKind
-import fsm.sample.logging.TransitionLog
+import fsm.sample.effect.CrossCuttingEnv
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -36,18 +36,18 @@ class FileProtocolTest {
 
     @Test
     fun `Read while Closed is refused and state stays Closed`() {
-        val log = TransitionLog()
-        val p = FileProtocol(log = log)
+        val env = CrossCuttingEnv()
+        val p = FileProtocol(crossCutting = env)
         val r = p.offer(FileEvent.Read)
         assertTrue(r is OfferResult.Refused)
         assertEquals(FileState.Closed, p.current)
-        assertTrue(log.snapshot().any { it.kind == RecordKind.REFUSAL })
+        assertTrue(env.log.snapshot().any { it.kind == RecordKind.REFUSAL })
     }
 
     @Test
     fun `happy path Open Read Close drives pure transitions and logs`() {
-        val log = TransitionLog()
-        val p = FileProtocol(log = log)
+        val env = CrossCuttingEnv()
+        val p = FileProtocol(crossCutting = env)
 
         assertTrue(p.offer(FileEvent.Open) is OfferResult.Accepted)
         assertEquals(FileState.Opened, p.current)
@@ -58,7 +58,7 @@ class FileProtocolTest {
         assertTrue(p.offer(FileEvent.Close) is OfferResult.Accepted)
         assertEquals(FileState.Closed, p.current)
 
-        val transitions = log.snapshot().filter { it.kind == RecordKind.TRANSITION }
+        val transitions = env.log.snapshot().filter { it.kind == RecordKind.TRANSITION }
         assertEquals(3, transitions.size)
         assertEquals(listOf("Open", "Read", "Close"), transitions.map { it.event })
         assertEquals("Closed", transitions.last().to)

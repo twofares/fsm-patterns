@@ -1,7 +1,7 @@
 package fsm.sample.gof
 
 import fsm.sample.logging.RecordKind
-import fsm.sample.logging.TransitionLog
+import fsm.sample.effect.CrossCuttingEnv
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -15,14 +15,14 @@ class ConnectionMachineTest {
 
     @Test
     fun `connect enters Online then Idle with entry records`() {
-        val log = TransitionLog()
-        val ctx = ConnectionContext(log = log)
+        val env = CrossCuttingEnv()
+        val ctx = ConnectionContext(crossCutting = env)
         // Initial Offline was entered in init
         assertEquals(Offline, ctx.current)
         assertTrue(ctx.handle(ConnEvent.Connect))
         assertEquals(Idle, ctx.current)
 
-        val entries = log.snapshot().filter { it.kind == RecordKind.ENTRY }
+        val entries = env.log.snapshot().filter { it.kind == RecordKind.ENTRY }
         // Offline (init) + Online + Idle on connect
         assertTrue(entries.any { it.to == "Offline" })
         assertTrue(entries.any { it.to == "Online" })
@@ -31,8 +31,8 @@ class ConnectionMachineTest {
 
     @Test
     fun `heartbeat is handled by Online superstate without leaving Idle`() {
-        val log = TransitionLog()
-        val ctx = ConnectionContext(log = log)
+        val env = CrossCuttingEnv()
+        val ctx = ConnectionContext(crossCutting = env)
         ctx.handle(ConnEvent.Connect)
         assertEquals(Idle, ctx.current)
         assertEquals(0, ctx.port.heartbeats)
@@ -41,7 +41,7 @@ class ConnectionMachineTest {
         assertEquals(Idle, ctx.current)
         assertEquals(1, ctx.port.heartbeats)
 
-        val transitions = log.snapshot().filter {
+        val transitions = env.log.snapshot().filter {
             it.kind == RecordKind.TRANSITION && it.event == "Heartbeat"
         }
         assertEquals(1, transitions.size)
@@ -51,8 +51,8 @@ class ConnectionMachineTest {
 
     @Test
     fun `disconnect from Transferring uses hierarchical Online handler`() {
-        val log = TransitionLog()
-        val ctx = ConnectionContext(log = log)
+        val env = CrossCuttingEnv()
+        val ctx = ConnectionContext(crossCutting = env)
         ctx.handle(ConnEvent.Connect)
         ctx.handle(ConnEvent.StartTransfer)
         assertEquals(Transferring, ctx.current)
@@ -60,7 +60,7 @@ class ConnectionMachineTest {
         assertTrue(ctx.handle(ConnEvent.Disconnect))
         assertEquals(Offline, ctx.current)
 
-        val exits = log.snapshot().filter { it.kind == RecordKind.EXIT }.map { it.from }
+        val exits = env.log.snapshot().filter { it.kind == RecordKind.EXIT }.map { it.from }
         // Leave Transferring then Online before Offline entry path
         assertTrue(exits.contains("Transferring"))
         assertTrue(exits.contains("Online"))
@@ -68,11 +68,11 @@ class ConnectionMachineTest {
 
     @Test
     fun `entry exit order is outer to inner on enter and reverse on exit`() {
-        val log = TransitionLog()
-        val ctx = ConnectionContext(log = log)
+        val env = CrossCuttingEnv()
+        val ctx = ConnectionContext(crossCutting = env)
         ctx.handle(ConnEvent.Connect) // Offline exit, Online enter, Idle enter
 
-        val afterConnect = log.snapshot()
+        val afterConnect = env.log.snapshot()
         val offlineExitIdx = afterConnect.indexOfFirst {
             it.kind == RecordKind.EXIT && it.from == "Offline"
         }
@@ -89,16 +89,16 @@ class ConnectionMachineTest {
         assertTrue(idleEntryIdx > onlineEntryIdx)
 
         // StartTransfer: stay under Online — only Idle exit, Transferring enter
-        log.clear()
+        env.log.clear()
         // Re-seed: need a fresh context for clean exit order check on disconnect
-        val log2 = TransitionLog()
-        val ctx2 = ConnectionContext(log = log2)
+        val env2 = CrossCuttingEnv()
+        val ctx2 = ConnectionContext(crossCutting = env2)
         ctx2.handle(ConnEvent.Connect)
         ctx2.handle(ConnEvent.StartTransfer)
-        log2.clear()
+        env2.log.clear()
         ctx2.handle(ConnEvent.Disconnect)
 
-        val snap = log2.snapshot()
+        val snap = env2.log.snapshot()
         val exitTransferring = snap.indexOfFirst { it.kind == RecordKind.EXIT && it.from == "Transferring" }
         val exitOnline = snap.indexOfFirst { it.kind == RecordKind.EXIT && it.from == "Online" }
         val enterOffline = snap.indexOfFirst { it.kind == RecordKind.ENTRY && it.to == "Offline" }
@@ -109,10 +109,10 @@ class ConnectionMachineTest {
 
     @Test
     fun `illegal event at Offline is refused and state unchanged`() {
-        val log = TransitionLog()
-        val ctx = ConnectionContext(log = log)
+        val env = CrossCuttingEnv()
+        val ctx = ConnectionContext(crossCutting = env)
         assertFalse(ctx.handle(ConnEvent.StartTransfer))
         assertEquals(Offline, ctx.current)
-        assertTrue(log.snapshot().any { it.kind == RecordKind.REFUSAL })
+        assertTrue(env.log.snapshot().any { it.kind == RecordKind.REFUSAL })
     }
 }

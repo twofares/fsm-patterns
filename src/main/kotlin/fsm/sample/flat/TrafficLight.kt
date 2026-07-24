@@ -1,20 +1,23 @@
 package fsm.sample.flat
 
-import fsm.sample.effect.AuditInterpreter
+import fsm.sample.effect.CrossCuttingEnv
+import fsm.sample.effect.CrossCuttingInterpreter
 import fsm.sample.effect.StepResult
 import fsm.sample.effect.auditTransition
-import fsm.sample.logging.TransitionLog
+import fsm.sample.effect.metricInc
+import fsm.sample.effect.traceSpan
 
 /**
- * PURPOSE: Classical finite-state machine encoded as ordinary Kotlin — no engine.
+ * PURPOSE: Flat FSM — pure step declares **multiple cross-cutting families** + domain.
  *
- * Pure [step] returns next state + split lists:
- * - [StepResult.audit]: cross-cutting transition log
- * - [StepResult.domain]: [LightEffect.DriveLamp] (signal hardware intent)
- * Boundary [handle] assigns state then [AuditInterpreter.apply] + [applyDomainLight].
+ * Cross-cutting (shared [CrossCuttingEnv]):
+ * - Audit.LogTransition — mode change log
+ * - Metric.Inc("fsm.transitions") — process-wide transition counter
+ * - Metric.Inc("light.ticks") or Trace.Span on Emergency — disparate families
+ *
+ * Domain: [LightEffect.DriveLamp] → [LightPort] only.
  */
 
-/** Closed set of traffic-light modes. Sealed = no external subclasses. */
 sealed class LightState {
     data object Red : LightState()
     data object Green : LightState()
@@ -27,7 +30,6 @@ sealed class LightState {
     }
 }
 
-/** Closed set of inputs that may affect the light. */
 sealed class LightEvent {
     data object Tick : LightEvent()
     data object Emergency : LightEvent()
@@ -38,10 +40,6 @@ sealed class LightEvent {
     }
 }
 
-/**
- * PURPOSE: Pure transition function State + Event → State.
- * No side effects. Export and [step] share this math.
- */
 fun transition(state: LightState, event: LightEvent): LightState = when (event) {
     LightEvent.Tick -> when (state) {
         LightState.Red -> LightState.Green
@@ -52,11 +50,8 @@ fun transition(state: LightState, event: LightEvent): LightState = when (event) 
 }
 
 /**
- * PURPOSE: Pure step — next + audit (cross-cutting) + DriveLamp (domain).
- * Does not touch log or [LightPort].
- *
- * Total-step policy: domain [DriveLamp] is always declared for the engagement
- * (including self-loops such as Emergency on Red).
+ * PURPOSE: Pure step — next + multi-family crossCutting + DriveLamp domain.
+ * Does not touch [CrossCuttingEnv] or [LightPort].
  */
 fun step(
     state: LightState,
@@ -64,27 +59,34 @@ fun step(
     machineName: String = "TrafficLight",
 ): StepResult<LightState, LightEffect> {
     val next = transition(state, event)
-    return StepResult(
-        next = next,
-        audit = listOf(
+    val cross = buildList {
+        add(
             auditTransition(
                 machine = machineName,
                 from = state.label(),
                 event = event.label(),
                 to = next.label(),
             ),
-        ),
+        )
+        add(metricInc("fsm.transitions"))
+        when (event) {
+            LightEvent.Tick -> add(metricInc("light.ticks"))
+            LightEvent.Emergency -> add(traceSpan("light.emergency", "forced ${next.label()}"))
+        }
+    }
+    return StepResult(
+        next = next,
+        crossCutting = cross,
         domain = listOf(LightEffect.DriveLamp(next.label())),
     )
 }
 
 /**
- * PURPOSE: Boundary holder — assign state, then interpret to log + port.
- * Pure [step] never runs interpreters; only [handle] does.
+ * PURPOSE: Boundary — assign state; apply cross-cutting env + domain port.
  */
 class TrafficLight(
     initial: LightState = LightState.Red,
-    private val log: TransitionLog? = null,
+    val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: LightPort = LightPort(),
     private val machineName: String = "TrafficLight",
 ) {
@@ -94,7 +96,7 @@ class TrafficLight(
     fun handle(event: LightEvent): LightState {
         val result = step(current, event, machineName)
         current = result.next
-        AuditInterpreter.apply(result.audit, log)
+        CrossCuttingInterpreter.apply(result.crossCutting, crossCutting)
         applyDomainLight(result.domain, port)
         return current
     }

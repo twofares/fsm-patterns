@@ -1,13 +1,14 @@
 package fsm.sample.gof
 
-import fsm.sample.effect.AuditEffect
-import fsm.sample.effect.AuditInterpreter
+import fsm.sample.effect.CrossCuttingEffect
+import fsm.sample.effect.CrossCuttingEnv
+import fsm.sample.effect.CrossCuttingInterpreter
 import fsm.sample.effect.auditEntry
 import fsm.sample.effect.auditExit
 import fsm.sample.effect.auditRefusal
 import fsm.sample.effect.auditTransition
-import fsm.sample.effect.exportLabel
-import fsm.sample.logging.TransitionLog
+import fsm.sample.effect.metricInc
+import fsm.sample.effect.traceSpan
 
 /**
  * PURPOSE: GoF State pattern + hierarchical superstate delegation + entry/exit.
@@ -16,10 +17,10 @@ import fsm.sample.logging.TransitionLog
  * 1. GoF State: context holds current state object; transitions replace it.
  * 2. Hierarchical FSMs: composite/leaf states; unhandled events bubble to parent
  *    (behavioral inheritance — program only differences from the superstate).
- * 3. Entry/exit / heartbeat as *declared* split audit + domain fragments: pure-ish
- *    handlers return next leaf + domain; pure [declaredEffects] assembles LCA
+ * 3. Entry/exit / heartbeat as *declared* split cross-cutting + domain fragments:
+ *    pure-ish handlers return next leaf + domain; pure [declaredEffects] assembles LCA
  *    fragments; the context boundary applies each fragment
- *    (audit then domain via [AuditInterpreter.apply] + [applyDomainConnection]).
+ *    (cross-cutting then domain via [CrossCuttingInterpreter] + [applyDomainConnection]).
  *
  * Domain vignette: a network connection with hierarchy
  *   Offline (leaf)
@@ -65,12 +66,11 @@ sealed class HandleResult {
  * PURPOSE: One LCA assembly fragment — paired audit + domain for a single
  * exit/enter/transition/handler step.
  *
- * Boundary applies [audit] then [domain] of this fragment before the next fragment,
- * so Online enter keeps `LogEntry(Online)` paired with `OpenSession` before Idle's
- * `LogEntry` (UML-style timeline with split types).
+ * Boundary applies [crossCutting] then [domain] of this fragment before the next,
+ * so Online enter keeps audit/metric/trace paired with `OpenSession` before Idle.
  */
 data class EffectFragment(
-    val audit: List<AuditEffect> = emptyList(),
+    val crossCutting: List<CrossCuttingEffect> = emptyList(),
     val domain: List<ConnectionEffect> = emptyList(),
 )
 
@@ -84,7 +84,7 @@ data class ConnectionStepEffects(
     val fragments: List<EffectFragment> = emptyList(),
 ) {
     /** Flattened audit (tests / inspection); apply uses [fragments] in order. */
-    val audit: List<AuditEffect> get() = fragments.flatMap { it.audit }
+    val crossCutting: List<CrossCuttingEffect> get() = fragments.flatMap { it.crossCutting }
 
     /** Flattened domain (tests / inspection); apply uses [fragments] in order. */
     val domain: List<ConnectionEffect> get() = fragments.flatMap { it.domain }
@@ -95,7 +95,7 @@ data class ConnectionStepEffects(
      */
     fun exportLabels(): List<String> =
         fragments.flatMap { f ->
-            f.audit.map { it.exportLabel() } + f.domain.map { it.exportLabel() }
+            f.crossCutting.map { it.exportLabel() } + f.domain.map { it.exportLabel() }
         }
 
     operator fun plus(other: ConnectionStepEffects): ConnectionStepEffects =
@@ -104,13 +104,13 @@ data class ConnectionStepEffects(
     companion object {
         /** Single-fragment assembly helper (empty lists yield no fragment). */
         fun of(
-            audit: List<AuditEffect> = emptyList(),
+            crossCutting: List<CrossCuttingEffect> = emptyList(),
             domain: List<ConnectionEffect> = emptyList(),
         ): ConnectionStepEffects =
-            if (audit.isEmpty() && domain.isEmpty()) {
+            if (crossCutting.isEmpty() && domain.isEmpty()) {
                 ConnectionStepEffects()
             } else {
-                ConnectionStepEffects(listOf(EffectFragment(audit, domain)))
+                ConnectionStepEffects(listOf(EffectFragment(crossCutting, domain)))
             }
     }
 }
@@ -133,11 +133,11 @@ sealed class ConnState {
 
     /** PURPOSE: Pure entry effect declaration (audit ± domain; no I/O). */
     open fun enterEffects(machineName: String): ConnectionStepEffects =
-        ConnectionStepEffects.of(audit = listOf(auditEntry(machineName, name)))
+        ConnectionStepEffects.of(crossCutting = listOf(auditEntry(machineName, name)))
 
     /** PURPOSE: Pure exit effect declaration (audit ± domain; no I/O). */
     open fun exitEffects(machineName: String): ConnectionStepEffects =
-        ConnectionStepEffects.of(audit = listOf(auditExit(machineName, name)))
+        ConnectionStepEffects.of(crossCutting = listOf(auditExit(machineName, name)))
 
     /**
      * PURPOSE: Per-state behavior. Default is Unhandled so events bubble up.
@@ -177,7 +177,11 @@ data object Online : ConnState() {
      */
     override fun enterEffects(machineName: String): ConnectionStepEffects =
         ConnectionStepEffects.of(
-            audit = listOf(auditEntry(machineName, name)),
+            crossCutting = listOf(
+                auditEntry(machineName, name),
+                metricInc("connection.session.open"),
+                traceSpan("connection.session", "open"),
+            ),
             domain = listOf(ConnectionEffect.OpenSession),
         )
 
@@ -186,7 +190,11 @@ data object Online : ConnState() {
      */
     override fun exitEffects(machineName: String): ConnectionStepEffects =
         ConnectionStepEffects.of(
-            audit = listOf(auditExit(machineName, name)),
+            crossCutting = listOf(
+                auditExit(machineName, name),
+                metricInc("connection.session.close"),
+                traceSpan("connection.session", "close"),
+            ),
             domain = listOf(ConnectionEffect.CloseSession),
         )
 
@@ -274,13 +282,14 @@ fun planTransition(
     }
 
     assembled += ConnectionStepEffects.of(
-        audit = listOf(
+        crossCutting = listOf(
             auditTransition(
                 machine = machineName,
                 from = from.name,
                 event = event.label(),
                 to = to.name,
             ),
+            metricInc("fsm.transitions"),
         ),
     )
 
@@ -317,27 +326,36 @@ fun declaredEffects(
         if (next !== from) {
             planTransition(from, next, event, result.domain, machineName)
         } else {
+            val metric = if (event is ConnEvent.Heartbeat) {
+                metricInc("connection.heartbeat")
+            } else {
+                metricInc("connection.same_leaf")
+            }
             ConnectionStepEffects.of(
-                audit = listOf(
+                crossCutting = listOf(
                     auditTransition(
                         machine = machineName,
                         from = from.name,
                         event = event.label(),
                         to = next.name,
                     ),
+                    metricInc("fsm.transitions"),
+                    metric,
                 ),
                 domain = result.domain,
             )
         }
     }
     HandleResult.Unhandled -> ConnectionStepEffects.of(
-        audit = listOf(
+        crossCutting = listOf(
             auditRefusal(
                 machine = machineName,
                 state = from.name,
                 event = event.label(),
                 reason = "no state in hierarchy accepted event",
             ),
+            metricInc("connection.refuse"),
+            traceSpan("connection.refuse", event.label()),
         ),
     )
 }
@@ -379,12 +397,11 @@ fun dispatchWithDelegation(
  * so production paths get Offline entry audit. Export never constructs this class —
  * it uses pure [dispatchWithDelegation] + [declaredEffects] only.
  *
- * Dual sinks: [log] (audit) + [port] (domain, including heartbeats). No separate
- * heartbeat callback or context-owned counter.
+ * Dual sinks: [crossCutting] env (audit/metrics/trace) + [port] (domain, including heartbeats).
  */
 class ConnectionContext(
     initial: ConnState = Offline,
-    val log: TransitionLog? = null,
+    val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: ConnectionPort = ConnectionPort(),
     val machineName: String = "Connection",
 ) {
@@ -392,17 +409,12 @@ class ConnectionContext(
         private set
 
     init {
-        // Enter the full ancestry of the initial state outermost → innermost.
         val effects = pathFromRoot(initial).fold(ConnectionStepEffects()) { acc, s ->
             acc + s.enterEffects(machineName)
         }
         applyEffects(effects)
     }
 
-    /**
-     * Dispatch one event using hierarchical delegation, then replace state if needed.
-     * @return true if some state in the chain handled the event
-     */
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
         val result = dispatchWithDelegation(fromLeaf, event, fromLeaf)
@@ -413,7 +425,6 @@ class ConnectionContext(
                 false
             }
             is HandleResult.Handled -> {
-                // Apply while still in fromLeaf; assign only after for real transitions.
                 applyEffects(effects)
                 if (result.next !== fromLeaf) {
                     current = result.next
@@ -424,12 +435,12 @@ class ConnectionContext(
     }
 
     /**
-     * PURPOSE: Apply each LCA fragment as audit-then-domain so paired enter/exit
-     * domain (OpenSession/CloseSession) stays on the timeline next to its audit.
+     * PURPOSE: Apply each LCA fragment as cross-cutting-then-domain so paired
+     * enter/exit domain stays next to its audit/metric/trace labels.
      */
     private fun applyEffects(effects: ConnectionStepEffects) {
         for (fragment in effects.fragments) {
-            AuditInterpreter.apply(fragment.audit, log)
+            CrossCuttingInterpreter.apply(fragment.crossCutting, crossCutting)
             applyDomainConnection(fragment.domain, port)
         }
     }

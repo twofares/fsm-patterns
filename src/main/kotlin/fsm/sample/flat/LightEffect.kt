@@ -3,11 +3,12 @@ package fsm.sample.flat
 /**
  * PURPOSE: TrafficLight **domain** effect ADT — hardware intents only.
  *
- * Cross-cutting audit is a separate `List<AuditEffect>` on [fsm.sample.effect.StepResult],
- * not nested here. Domain case:
+ * Cross-cutting is a separate `List<CrossCuttingEffect>` on [fsm.sample.effect.StepResult]
+ * (audit / metrics / trace families) — not nested here. Domain case:
  * - [DriveLamp]: drive the signal lamp (this machine only).
  *
- * Pure [step] declares audit + domain; boundary applies audit → log, domain → [LightPort].
+ * Pure [step] declares crossCutting + domain; boundary applies
+ * [CrossCuttingInterpreter] then domain → [LightPort].
  *
  * Domain policy (total / engagement-driven): [DriveLamp] is declared for every accepted
  * step, including self-loops (e.g. Emergency when already Red). Domain tracks the
@@ -39,7 +40,7 @@ class LightPort {
 
 /**
  * PURPOSE: Local domain boundary for TrafficLight.
- * Domain [DriveLamp] → [port]. Audit is applied separately via [AuditInterpreter].
+ * Domain [DriveLamp] → [port]. Cross-cutting is applied separately via [CrossCuttingInterpreter].
  */
 fun applyDomainLight(domain: List<LightEffect>, port: LightPort) {
     for (effect in domain) {

@@ -1,23 +1,25 @@
 package fsm.sample.orthogonal
 
-import fsm.sample.effect.AuditEffect
-import fsm.sample.effect.AuditInterpreter
+import fsm.sample.effect.CrossCuttingEffect
+import fsm.sample.effect.CrossCuttingEnv
+import fsm.sample.effect.CrossCuttingInterpreter
 import fsm.sample.effect.StepResult
 import fsm.sample.effect.auditRefusal
 import fsm.sample.effect.auditTransition
-import fsm.sample.logging.TransitionLog
+import fsm.sample.effect.metricInc
+import fsm.sample.effect.traceSpan
 
 /**
- * PURPOSE: Orthogonal Component pattern — concurrent independent state machines
- * composed without a multi-region statechart engine.
+ * PURPOSE: Orthogonal door — multi-family cross-cutting + domain actuators.
  *
- * Effects:
- * - **Cross-cutting** region/container audit → shared [TransitionLog]
- * - **Domain** actuators (strike / deadbolt / chime) → shared [DoorPort]
- * - Container **refusals are audit-only** (`List<AuditEffect>`, no DoorEffect ADT)
+ * Cross-cutting ([CrossCuttingEnv] shared by regions + container):
+ * - Audit transitions / refusals
+ * - Metrics (fsm.transitions, door.refuse, door.latch.*, door.swing.open)
+ * - Trace on policy refuse (disparate family from audit)
+ *
+ * Domain → [DoorPort] actuators only on successful region steps.
+ * Container refuse: cross-cutting only (no domain).
  */
-
-// --- Region A: Latch ---------------------------------------------------------
 
 sealed class LatchState {
     data object Locked : LatchState()
@@ -34,13 +36,9 @@ sealed class LatchEvent {
     fun label(): String = this::class.simpleName ?: toString()
 }
 
-/**
- * PURPOSE: Independent latch region machine.
- * Pure [step] declares audit + domain actuator for every engagement (total-step).
- */
 class LatchMachine(
     initial: LatchState = LatchState.Locked,
-    private val log: TransitionLog? = null,
+    val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: DoorPort = DoorPort(),
     private val machineName: String = "Latch",
 ) {
@@ -52,11 +50,6 @@ class LatchMachine(
         LatchEvent.Unlock -> LatchState.Unlocked
     }
 
-    /**
-     * PURPOSE: Pure step — audit always; domain actuator for target mode.
-     * Unlock → EnergizeStrike; Lock → EngageDeadbolt (engagement-driven, even
-     * if already that mode).
-     */
     fun step(
         state: LatchState,
         event: LatchEvent,
@@ -66,15 +59,21 @@ class LatchMachine(
             LatchEvent.Unlock -> LatchEffect.EnergizeStrike
             LatchEvent.Lock -> LatchEffect.EngageDeadbolt
         }
+        val metricName = when (event) {
+            LatchEvent.Unlock -> "door.latch.unlock"
+            LatchEvent.Lock -> "door.latch.lock"
+        }
         return StepResult(
             next = next,
-            audit = listOf(
+            crossCutting = listOf(
                 auditTransition(
                     machine = machineName,
                     from = state.label(),
                     event = event.label(),
                     to = next.label(),
                 ),
+                metricInc("fsm.transitions"),
+                metricInc(metricName),
             ),
             domain = listOf(domain),
         )
@@ -83,13 +82,11 @@ class LatchMachine(
     fun handle(event: LatchEvent): LatchState {
         val result = step(current, event)
         current = result.next
-        AuditInterpreter.apply(result.audit, log)
+        CrossCuttingInterpreter.apply(result.crossCutting, crossCutting)
         applyDomainLatch(result.domain, port)
         return current
     }
 }
-
-// --- Region B: Swing ---------------------------------------------------------
 
 sealed class SwingState {
     data object Closed : SwingState()
@@ -106,13 +103,9 @@ sealed class SwingEvent {
     fun label(): String = this::class.simpleName ?: toString()
 }
 
-/**
- * PURPOSE: Independent swing region machine.
- * OpenDoor → SoundChime (domain); CloseDoor → audit only.
- */
 class SwingMachine(
     initial: SwingState = SwingState.Closed,
-    private val log: TransitionLog? = null,
+    val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: DoorPort = DoorPort(),
     private val machineName: String = "Swing",
 ) {
@@ -134,30 +127,29 @@ class SwingMachine(
         } else {
             emptyList()
         }
-        return StepResult(
-            next = next,
-            audit = listOf(
+        val cc = buildList {
+            add(
                 auditTransition(
                     machine = machineName,
                     from = state.label(),
                     event = event.label(),
                     to = next.label(),
                 ),
-            ),
-            domain = domain,
-        )
+            )
+            add(metricInc("fsm.transitions"))
+            if (event is SwingEvent.OpenDoor) add(metricInc("door.swing.open"))
+        }
+        return StepResult(next = next, crossCutting = cc, domain = domain)
     }
 
     fun handle(event: SwingEvent): SwingState {
         val result = step(current, event)
         current = result.next
-        AuditInterpreter.apply(result.audit, log)
+        CrossCuttingInterpreter.apply(result.crossCutting, crossCutting)
         applyDomainSwing(result.domain, port)
         return current
     }
 }
-
-// --- External events for the container ---------------------------------------
 
 sealed class DoorEvent {
     data object Unlock : DoorEvent()
@@ -168,14 +160,14 @@ sealed class DoorEvent {
 }
 
 /**
- * PURPOSE: Orthogonal container — shared log + [DoorPort] for both regions.
- * Refused Open/Lock: audit only, port unchanged. No thin DoorEffect ADT.
+ * PURPOSE: Orthogonal container — **shared** [CrossCuttingEnv] + [DoorPort]
+ * across regions so metrics/trace/audit accumulate process-wide for the door.
  */
 class DoorSystem(
-    val log: TransitionLog = TransitionLog(),
+    val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: DoorPort = DoorPort(),
-    val latch: LatchMachine = LatchMachine(log = log, port = port),
-    val swing: SwingMachine = SwingMachine(log = log, port = port),
+    val latch: LatchMachine = LatchMachine(crossCutting = crossCutting, port = port),
+    val swing: SwingMachine = SwingMachine(crossCutting = crossCutting, port = port),
 ) {
     val machineName: String = "DoorSystem"
 
@@ -183,37 +175,33 @@ class DoorSystem(
         "latch=${latch.current.label()}, swing=${swing.current.label()}"
 
     /**
-     * PURPOSE: Pure container guard — refusal effects are **audit-only**.
-     * Returns plain [AuditEffect] list (no one-arm DoorEffect sealed type).
+     * PURPOSE: Pure guard — multi-family **cross-cutting only** (audit + metric + trace).
+     * No domain actuators on refuse.
      */
     fun guardRefusalEffects(
         event: DoorEvent,
         latchState: LatchState = latch.current,
         swingState: SwingState = swing.current,
         config: String = "latch=${latchState.label()}, swing=${swingState.label()}",
-    ): List<AuditEffect> = when (event) {
+    ): List<CrossCuttingEffect> = when (event) {
         DoorEvent.Open ->
             if (latchState is LatchState.Locked) {
+                val reason = "cannot open while locked"
                 listOf(
-                    auditRefusal(
-                        machine = machineName,
-                        state = config,
-                        event = event.label(),
-                        reason = "cannot open while locked",
-                    ),
+                    auditRefusal(machineName, config, event.label(), reason),
+                    metricInc("door.refuse"),
+                    traceSpan("door.policy", reason),
                 )
             } else {
                 emptyList()
             }
         DoorEvent.Lock ->
             if (swingState is SwingState.Open) {
+                val reason = "cannot lock while door is open"
                 listOf(
-                    auditRefusal(
-                        machine = machineName,
-                        state = config,
-                        event = event.label(),
-                        reason = "cannot lock while door is open",
-                    ),
+                    auditRefusal(machineName, config, event.label(), reason),
+                    metricInc("door.refuse"),
+                    traceSpan("door.policy", reason),
                 )
             } else {
                 emptyList()
@@ -224,7 +212,7 @@ class DoorSystem(
     fun handle(event: DoorEvent): Boolean {
         val refusal = guardRefusalEffects(event)
         if (refusal.isNotEmpty()) {
-            AuditInterpreter.apply(refusal, log)
+            CrossCuttingInterpreter.apply(refusal, crossCutting)
             return false
         }
         return when (event) {

@@ -22,86 +22,51 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 
 | Path | Discipline |
 |------|------------|
-| `src/main/kotlin/fsm/sample/flat/` | Sealed states/events, pure `StepResult<S, LightEffect>`, dual-sink handle |
-| `src/main/kotlin/fsm/sample/gof/` | GoF State, hierarchy, domain `ConnectionEffect` + plain audit lists |
-| `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal regions: `LatchEffect` / `SwingEffect` (actuators only) |
-| `src/main/kotlin/fsm/sample/csp/` | CSP alphabet/menus, `FileEffect` domain I/O; refuse = audit only |
-| `src/main/kotlin/fsm/sample/effect/` | `StepResult<S, D>` (audit + domain lists), **cross-cutting** `AuditEffect` |
-| `src/main/kotlin/fsm/sample/logging/` | Consistent transition/entry/exit/refusal log |
-| `src/main/kotlin/fsm/sample/export/` | Stdlib product evaluation → Markdown tables + Mermaid |
-| `src/main/kotlin/fsm/sample/DemoMain.kt` | Fixed demo script exercising all patterns |
-| `src/main/kotlin/fsm/sample/ExportMain.kt` | Launch path for generated tables/diagrams |
+| `src/main/kotlin/fsm/sample/flat/` | Sealed FSM, `StepResult` + DriveLamp domain |
+| `src/main/kotlin/fsm/sample/gof/` | Hierarchical Connection + session domain |
+| `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal door regions + actuators |
+| `src/main/kotlin/fsm/sample/csp/` | CSP file protocol + I/O domain intents |
+| `src/main/kotlin/fsm/sample/effect/` | **Generalized** `CrossCuttingEffect` + env + interpreter; `StepResult` |
+| `src/main/kotlin/fsm/sample/logging/` | Transition audit log (one cross-cutting sink) |
+| `src/main/kotlin/fsm/sample/export/` | Product evaluation → Markdown + Mermaid |
+| `DemoMain.kt` / `ExportMain.kt` | Dual-surface demos |
 
-## Domain-specific vs cross-cutting effects
+## Cross-cutting vs domain effects
 
-There is **no global kitchen-sink `Effect` ADT** and **no nested `*.Audit` wrappers**.
-Each behavior owns a sealed **domain** type; pure steps return split lists:
+Cross-cutting is **not** audit-only. A single sealed root holds **disparate families**:
 
-```kotlin
-data class StepResult<S, D>(
-  val next: S,
-  val audit: List<AuditEffect> = emptyList(),
-  val domain: List<D> = emptyList(),
-)
+| Family | Type | Sink on `CrossCuttingEnv` |
+|--------|------|---------------------------|
+| **Audit** | `CrossCuttingEffect.Audit.*` | `TransitionLog` |
+| **Metric** | `CrossCuttingEffect.Metric.Inc` | `MetricsPort` |
+| **Trace** | `CrossCuttingEffect.Trace.Span` | `TracePort` |
+
+Domain effects stay **machine-local** sealed ADTs → machine **ports** (lamp, file ops, session/heartbeat, door actuators).
+
+```text
+StepResult(next, crossCutting: List<CrossCuttingEffect>, domain: List<D>)
 ```
 
-**Two sinks at the boundary:**
+| Machine | Example cross-cutting | Domain |
+|---------|----------------------|--------|
+| TrafficLight | Audit transition + `Metric.Inc(fsm.transitions)` + `Metric.Inc(light.ticks)` / `Trace` on Emergency | `DriveLamp` |
+| FileProtocol | Accept: audit + metrics; Refuse: audit + `csp.refuse` metric + **Trace** | Open/Read/Close handle (accept only) |
+| Connection | Session open/close: audit + metrics + **Trace**; refuse: metric + trace | `OpenSession` / `CloseSession` / `IncHeartbeat` |
+| Door | Region metrics; refuse: audit + `door.refuse` + **Trace.Span(door.policy)** | Strike / deadbolt / chime |
 
-| Sink | Kind | Role |
-|------|------|------|
-| `TransitionLog` | **Cross-cutting** | Shared audit shape (`AuditEffect` → same TRANSITION/ENTRY/EXIT/REFUSAL records) |
-| Machine **ports** | **Domain-specific** | In-memory actuators / I/O intents / session lifecycle (no real OS I/O) |
+Type separation: domain ADTs cannot hold cross-cutting cases; `List<LightEffect>` cannot hold `IncHeartbeat`.
 
-| Machine | Cross-cutting (audit list) | Domain (ports) |
-|---------|---------------------------|----------------|
-| TrafficLight | `LogTransition` → log | `DriveLamp(color)` → `LightPort` |
-| FileProtocol | accept/refuse audit | `OpenHandle` / `ReadChunk` / `CloseHandle` → `FilePort` (**refuse = audit only**) |
-| Connection | entry/exit/transition/refusal | `OpenSession` / `CloseSession` / `IncHeartbeat` → **`ConnectionPort` only** |
-| Door regions | latch/swing transition audit | `EnergizeStrike` / `EngageDeadbolt` / `SoundChime` → `DoorPort` |
-| Door container | guard **refusal audit only** (`List<AuditEffect>`) | *(none — refused Open does not sound chime)* |
+Export product evaluation reads pure effect **labels** only (no interpreters, no env/port mutation).
 
-Type system separation: `List<LightEffect>` cannot hold `ConnectionEffect.IncHeartbeat`.
-Export product evaluation reads pure effect **labels** only (no interpreters, no port
-mutation). Demo (`gradle run`) prints audit log **and** domain port snapshots side by side.
+Hierarchical Connection applies **fragments** (cross-cutting then domain per LCA step) so session domain stays next to Online enter/exit in export order.
 
-**Domain policy (total / engagement-driven):** domain actuators are declared for every
-accepted engagement, including self-loops (e.g. Emergency on Red, Read while Opened,
-Lock while Locked). Domain tracks the engagement, not only identity changes of state.
-
-**Pure vs boundary:** pure steps never call interpreters. Flat/CSP/region boundaries
-apply `AuditInterpreter.apply(audit, log)` then `applyDomain*(domain, port)`.
-
-**Hierarchical Connection ordering:** `planTransition` builds an ordered list of
-fragments (exit / transition / handler / enter). Each fragment is still dual-sink
-(audit list + domain list). Runtime apply and the Effects column walk fragments in
-LCA order and, within each fragment, audit then domain — so Online enter remains
-`LogEntry(Online), OpenSession` before `LogEntry(Idle)` (not a global “all audit then
-all domain” batch).
-
-## Export tables and effects
-
-`gradle runExport` product-evaluates each sample machine over its finite
-(state × event) domain using **shipped pure** APIs only:
-
-| Machine | Pure API used for rows |
-|---------|------------------------|
-| TrafficLight | `step(s, e)` → next + audit/domain |
-| FileProtocol | `stepOffer(s, e)` → accept/refuse + audit/domain |
-| Latch / Swing | `step(s, e)` → next + audit/domain |
-| Connection | pure `dispatchWithDelegation` + `planTransition` / `declaredEffects` |
-
-Markdown tables include an **Effects** column (comma-joined short names such as
-`LogTransition`, `LogRefusal`, `IncHeartbeat`, `LogEntry(Idle)`). For Connection,
-labels follow fragment LCA order (see hierarchical ordering above). Export never
-calls `handle` / `offer` / apply sinks — so logs and ports are not mutated while
-generating documentation. Mermaid diagrams remain **event-labeled** edges only;
-declared effects appear only in the Markdown tables.
-
-Regenerate the checked-in sample artifact with quiet Gradle so task banners and
-`BUILD SUCCESSFUL` do not pollute the file (non-quiet `runExport` writes those to stdout):
+## Export tables
 
 ```bash
 gradle -q runExport > export.md
 ```
+
+Markdown tables include an **Effects** column (comma-joined labels such as
+`Audit.LogTransition`, `Metric.Inc(fsm.transitions)`, `Trace.Span(...)`, `DriveLamp(Green)`).
 
 Every non-trivial type and path is documented with **PURPOSE** comments in source.
