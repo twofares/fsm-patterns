@@ -15,6 +15,7 @@ no third-party state-machine, statechart, or FSM library.
 ```bash
 gradle test
 gradle run
+gradle runExport   # product-evaluated tables + Mermaid diagrams
 ```
 
 ## Layout
@@ -26,6 +27,8 @@ gradle run
 | `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal Component composition + logging |
 | `src/main/kotlin/fsm/sample/csp/` | Explicit alphabet, menus, refusal of non-menu events |
 | `src/main/kotlin/fsm/sample/logging/` | Consistent transition/entry/exit/refusal log |
+| `src/main/kotlin/fsm/sample/export/` | Stdlib product evaluation → Markdown tables + Mermaid |
 | `src/main/kotlin/fsm/sample/DemoMain.kt` | Fixed demo script exercising all patterns |
+| `src/main/kotlin/fsm/sample/ExportMain.kt` | Launch path for generated tables/diagrams |
 
 Every non-trivial type and path is documented with **PURPOSE** comments in source.

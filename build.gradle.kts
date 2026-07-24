@@ -32,3 +32,12 @@ application {
     // Demo entry that exercises multiple patterns with consistent console output.
     mainClass.set("fsm.sample.DemoMainKt")
 }
+
+// PURPOSE: Dedicated launch for product-evaluated tables + Mermaid export.
+// `gradle runExport` — deterministic multi-machine Markdown/Mermaid document.
+tasks.register<JavaExec>("runExport") {
+    group = "application"
+    description = "Print transition tables and Mermaid diagrams (stdlib export)"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("fsm.sample.ExportMainKt")
+}
