@@ -22,12 +22,13 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 
 | Path | Discipline |
 |------|------------|
-| `src/main/kotlin/fsm/sample/flat/` | Sealed states/events, pure `State+Event→State`, exhaustive `when` |
-| `src/main/kotlin/fsm/sample/gof/` | GoF State, hierarchical parent delegation, entry/exit |
-| `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal Component composition + logging |
+| `src/main/kotlin/fsm/sample/flat/` | Sealed states/events, pure `State+Event→State` / `StepResult`, exhaustive `when` |
+| `src/main/kotlin/fsm/sample/gof/` | GoF State, hierarchical parent delegation, entry/exit/heartbeat as effects |
+| `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal Component composition + effect-declared logging |
 | `src/main/kotlin/fsm/sample/csp/` | Explicit alphabet, menus, refusal of non-menu events |
+| `src/main/kotlin/fsm/sample/effect/` | Sealed `Effect` + pure `StepResult` + thin `EffectInterpreter` boundary |
 | `src/main/kotlin/fsm/sample/logging/` | Consistent transition/entry/exit/refusal log |
-| `src/main/kotlin/fsm/sample/export/` | Stdlib product evaluation → Markdown tables + Mermaid |
+| `src/main/kotlin/fsm/sample/export/` | Stdlib product evaluation → Markdown tables + Mermaid (next-state only) |
 | `src/main/kotlin/fsm/sample/DemoMain.kt` | Fixed demo script exercising all patterns |
 | `src/main/kotlin/fsm/sample/ExportMain.kt` | Launch path for generated tables/diagrams |
 

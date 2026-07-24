@@ -2,8 +2,12 @@ package fsm.sample
 
 import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
+import fsm.sample.csp.FileState
+import fsm.sample.effect.Effect
 import fsm.sample.flat.LightEvent
+import fsm.sample.flat.LightState
 import fsm.sample.flat.TrafficLight
+import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
 import fsm.sample.logging.TransitionLog
@@ -15,10 +19,10 @@ import fsm.sample.orthogonal.DoorSystem
  * in ordinary Kotlin without any FSM/statechart library or engine.
  *
  * Patterns shown in one fixed script (same inputs every run for consistency):
- * 1. Flat sealed FSM + pure transitions + logging (TrafficLight)
- * 2. GoF State + hierarchical delegation + entry/exit (Connection)
+ * 1. Flat sealed FSM + pure transitions/steps + effect boundary (TrafficLight)
+ * 2. GoF State + hierarchical delegation + entry/exit/heartbeat effects (Connection)
  * 3. Orthogonal Component composition (DoorSystem)
- * 4. CSP-style alphabet + menu + refusal (FileProtocol)
+ * 4. CSP-style alphabet + menu + refusal effects (FileProtocol)
  *
  * Output is deterministic so two launches can be compared for consistency.
  */
@@ -32,8 +36,10 @@ fun main() {
     line("=== FSM / Statechart / CSP Patterns Sample (no libraries/engines) ===")
     line()
 
-    // --- 1. Flat pure FSM ----------------------------------------------------
-    line("--- Pattern: Flat sealed FSM (pure State+Event→State) ---")
+    // --- 1. Flat pure FSM + effects ------------------------------------------
+    line("--- Pattern: Flat sealed FSM (pure step → effects, boundary runs them) ---")
+    val pureStep = step(LightState.Red, LightEvent.Tick)
+    line("pure step effects (no I/O): ${pureStep.effects}")
     val flatLog = TransitionLog()
     val light = TrafficLight(log = flatLog)
     line("initial=${light.current.label()}")
@@ -44,13 +50,13 @@ fun main() {
     line(flatLog.formatAll())
     line()
 
-    // --- 2. GoF + hierarchical + entry/exit ----------------------------------
-    line("--- Pattern: GoF State + hierarchical delegation + entry/exit ---")
+    // --- 2. GoF + hierarchical + entry/exit effects --------------------------
+    line("--- Pattern: GoF State + hierarchical delegation + effect boundary ---")
     val connLog = TransitionLog()
     val conn = ConnectionContext(log = connLog)
     line("initial=${conn.current.name}")
     conn.handle(ConnEvent.Connect)          // Offline → Idle (enter Online, Idle)
-    conn.handle(ConnEvent.Heartbeat)        // handled by Online superstate
+    conn.handle(ConnEvent.Heartbeat)        // IncHeartbeat + LogTransition via boundary
     conn.handle(ConnEvent.StartTransfer)    // Idle → Transferring
     conn.handle(ConnEvent.FinishTransfer)   // Transferring → Idle
     conn.handle(ConnEvent.Disconnect)       // Idle → Offline (via Online)
@@ -74,10 +80,15 @@ fun main() {
     line(door.log.formatAll())
     line()
 
-    // --- 4. CSP-style process ------------------------------------------------
-    line("--- Pattern: CSP process (alphabet, menu, refusal) ---")
+    // --- 4. CSP-style process + refusal effects ------------------------------
+    line("--- Pattern: CSP process (alphabet, menu, refusal effects) ---")
     val cspLog = TransitionLog()
     val file = FileProtocol(log = cspLog)
+    val refusedStep = file.stepOffer(FileState.Closed, FileEvent.Read)
+    line("pure refuse step: $refusedStep")
+    line(
+        "pure refuse step effects: ${refusedStep.effects.filterIsInstance<Effect.LogRefusal>()}",
+    )
     line("initial=${file.current.label()} menu=${file.menu().map { it.label() }}")
     file.offer(FileEvent.Read)   // refuse: not in menu while Closed
     file.offer(FileEvent.Open)
@@ -87,5 +98,5 @@ fun main() {
     line(cspLog.formatAll())
     line()
 
-    line("=== Demo complete: flat, hierarchical/GoF, orthogonal, CSP ===")
+    line("=== Demo complete: flat, hierarchical/GoF, orthogonal, CSP (+ effects) ===")
 }

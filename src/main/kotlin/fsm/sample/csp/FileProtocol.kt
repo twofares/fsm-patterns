@@ -1,5 +1,7 @@
 package fsm.sample.csp
 
+import fsm.sample.effect.Effect
+import fsm.sample.effect.EffectInterpreter
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -10,8 +12,10 @@ import fsm.sample.logging.TransitionLog
  * The portable encoding used here:
  * - Explicit event alphabet for the whole process
  * - Per-state "menu" (acceptance set): only events in the menu are offered
- * - Refusal of non-menu events (logged, state unchanged)
+ * - Refusal of non-menu events (declared as [Effect.LogRefusal], state unchanged)
  * - Prefix / choice encoded as pure State + Event → State when accepted
+ * - Pure [stepOffer] returns sealed [OfferStep] (control outcome + effects);
+ *   boundary [offer] assigns + interprets without scanning log vocabulary
  *
  * Domain vignette: a tiny file protocol process
  *   Closed --Open--> Opened --Read--> Opened --Close--> Closed
@@ -43,7 +47,7 @@ sealed class FileEvent {
 }
 
 /**
- * PURPOSE: Result of offering an event to the process.
+ * PURPOSE: Result of offering an event to the process (boundary API).
  * [Accepted] carries the successor state; [Refused] keeps state and records why.
  */
 sealed class OfferResult {
@@ -52,11 +56,35 @@ sealed class OfferResult {
 }
 
 /**
+ * PURPOSE: Pure CSP offer step outcome — control flow separate from log effects.
+ *
+ * [Accepted] / [Refused] arms carry [effects] for the boundary; [next] is always
+ * defined (refusal keeps prior state). Logging vocabulary stays observational
+ * and is not used to classify accept vs refuse at the boundary.
+ */
+sealed class OfferStep {
+    abstract val next: FileState
+    abstract val effects: List<Effect>
+
+    data class Accepted(
+        override val next: FileState,
+        override val effects: List<Effect>,
+    ) : OfferStep()
+
+    data class Refused(
+        val reason: String,
+        override val next: FileState,
+        override val effects: List<Effect>,
+    ) : OfferStep()
+}
+
+/**
  * PURPOSE: CSP-style process with explicit alphabet and per-state menus.
  *
  * [alphabet] is the process-wide event set.
  * [menu] is the currently offered events (state-dependent acceptance).
- * [offer] refuses anything outside the current menu without mutating state.
+ * [stepOffer] is pure: sealed [OfferStep] with next + effects.
+ * [offer] is the boundary: assign state + interpret effects.
  */
 class FileProtocol(
     initial: FileState = FileState.Closed,
@@ -84,7 +112,8 @@ class FileProtocol(
 
     /**
      * PURPOSE: Pure transition when [event] is in the current menu.
-     * Exhaustive for accepted pairs; illegal pairs are never called from [offer].
+     * Exhaustive for accepted pairs; illegal pairs are never called from [stepOffer].
+     * Kept pure for export product evaluation (next-state-only tables).
      */
     fun pureWhenAccepted(state: FileState, event: FileEvent): FileState = when (state) {
         FileState.Closed -> when (event) {
@@ -101,31 +130,60 @@ class FileProtocol(
     }
 
     /**
-     * PURPOSE: Offer an event (CSP engagement). Refuse non-menu events.
-     * Also refuse events outside the process alphabet (extra safety).
+     * PURPOSE: Pure CSP offer step — sealed control outcome + declared effects.
+     * Does not mutate [current] or touch the log; tests assert [OfferStep.effects].
      */
-    fun offer(event: FileEvent): OfferResult {
+    fun stepOffer(
+        state: FileState,
+        event: FileEvent,
+    ): OfferStep {
         if (event !in alphabet) {
             val reason = "event outside process alphabet"
-            log?.recordRefusal(machineName, current.label(), event.label(), reason)
-            return OfferResult.Refused(reason)
+            return OfferStep.Refused(
+                reason = reason,
+                next = state,
+                effects = listOf(
+                    Effect.LogRefusal(machineName, state.label(), event.label(), reason),
+                ),
+            )
         }
-        val offered = menu(current)
+        val offered = menu(state)
         if (event !in offered) {
             val reason =
                 "event not in current menu ${offered.map { it.label() }}; refused"
-            log?.recordRefusal(machineName, current.label(), event.label(), reason)
-            return OfferResult.Refused(reason)
+            return OfferStep.Refused(
+                reason = reason,
+                next = state,
+                effects = listOf(
+                    Effect.LogRefusal(machineName, state.label(), event.label(), reason),
+                ),
+            )
         }
-        val from = current
-        val next = pureWhenAccepted(from, event)
-        current = next
-        log?.recordTransition(
-            machine = machineName,
-            from = from.label(),
-            event = event.label(),
-            to = next.label(),
+        val next = pureWhenAccepted(state, event)
+        return OfferStep.Accepted(
+            next = next,
+            effects = listOf(
+                Effect.LogTransition(
+                    machine = machineName,
+                    from = state.label(),
+                    event = event.label(),
+                    to = next.label(),
+                ),
+            ),
         )
-        return OfferResult.Accepted(next)
+    }
+
+    /**
+     * PURPOSE: Offer an event (CSP engagement). Boundary: assign + interpret.
+     * Maps sealed [OfferStep] to [OfferResult] without scanning effect types.
+     */
+    fun offer(event: FileEvent): OfferResult {
+        val result = stepOffer(current, event)
+        current = result.next
+        EffectInterpreter.apply(result.effects, log)
+        return when (result) {
+            is OfferStep.Accepted -> OfferResult.Accepted(result.next)
+            is OfferStep.Refused -> OfferResult.Refused(result.reason)
+        }
     }
 }

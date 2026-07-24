@@ -1,5 +1,8 @@
 package fsm.sample.flat
 
+import fsm.sample.effect.Effect
+import fsm.sample.effect.EffectInterpreter
+import fsm.sample.effect.StepResult
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -8,8 +11,9 @@ import fsm.sample.logging.TransitionLog
  * Discipline demonstrated:
  * - Sealed/closed state and event hierarchies (finite, compile-time known set)
  * - Pure transition of the form State + Event → State
+ * - Pure step of the form State + Event → StepResult(next, effects)
  * - Exhaustive `when` so missing handlers are rejected without an `else`
- * - Optional logging of every successful mode change at the assignment boundary
+ * - Boundary assigns state and interprets declared effects (logging)
  *
  * Domain vignette: a simple traffic light cycle. Flat (non-hierarchical) FSM
  * only — hierarchy is shown in the GoF/hierarchical package.
@@ -50,6 +54,8 @@ sealed class LightEvent {
  * discipline is visible as ordinary sequential code and is unit-testable in
  * isolation. Exhaustive `when` on both sealed hierarchies is intentional:
  * adding a new state/event without updating this function fails compilation.
+ *
+ * Kept for export product evaluation (next-state-only tables).
  */
 fun transition(state: LightState, event: LightEvent): LightState = when (event) {
     LightEvent.Tick -> when (state) {
@@ -61,10 +67,35 @@ fun transition(state: LightState, event: LightEvent): LightState = when (event) 
 }
 
 /**
- * PURPOSE: Thin mutable holder that applies pure [transition] and logs changes.
+ * PURPOSE: Pure step that declares next state + effects without running them.
  *
- * Separates pure transition math from the single side-effect boundary
- * (log assignment of current state). Not a reusable "engine" — just a
+ * Uses [transition] for successor math; wraps a [Effect.LogTransition] so
+ * tests can assert the effect list without a log or I/O.
+ */
+fun step(
+    state: LightState,
+    event: LightEvent,
+    machineName: String = "TrafficLight",
+): StepResult<LightState> {
+    val next = transition(state, event)
+    return StepResult(
+        next = next,
+        effects = listOf(
+            Effect.LogTransition(
+                machine = machineName,
+                from = state.label(),
+                event = event.label(),
+                to = next.label(),
+            ),
+        ),
+    )
+}
+
+/**
+ * PURPOSE: Thin mutable holder that applies pure [step] and interprets effects.
+ *
+ * Separates pure step math from the single side-effect boundary
+ * (assign current + [EffectInterpreter]). Not a reusable "engine" — just a
  * context that owns current state for demo/test convenience.
  */
 class TrafficLight(
@@ -76,19 +107,13 @@ class TrafficLight(
         private set
 
     /**
-     * Apply one pure transition, assign the result, and record the mode change.
+     * Apply one pure step, assign the result, and interpret declared effects.
      * @return the new current state (same reference as [current] after call)
      */
     fun handle(event: LightEvent): LightState {
-        val from = current
-        val next = transition(from, event)
-        current = next
-        log?.recordTransition(
-            machine = machineName,
-            from = from.label(),
-            event = event.label(),
-            to = next.label(),
-        )
+        val result = step(current, event, machineName)
+        current = result.next
+        EffectInterpreter.apply(result.effects, log)
         return current
     }
 }

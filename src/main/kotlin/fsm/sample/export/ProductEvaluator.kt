@@ -28,6 +28,9 @@ import fsm.sample.orthogonal.SwingState
  * Enumerates every (state, event) pair, calls the **shipped** pure transition /
  * menu functions (never re-implements rules), and builds [TransitionTable] rows.
  * Stdlib-only: no reflection required; domains listed explicitly from sealed sets.
+ *
+ * Effects ([fsm.sample.effect]) are intentionally omitted: export tables are
+ * next-state-only so product eval stays pure and free of log/counter side effects.
  */
 
 // --- Generic product helpers -------------------------------------------------

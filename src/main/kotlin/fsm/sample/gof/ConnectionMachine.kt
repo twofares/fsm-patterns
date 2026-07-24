@@ -1,5 +1,7 @@
 package fsm.sample.gof
 
+import fsm.sample.effect.Effect
+import fsm.sample.effect.EffectInterpreter
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -9,8 +11,8 @@ import fsm.sample.logging.TransitionLog
  * 1. GoF State: context holds current state object; transitions replace it.
  * 2. Hierarchical FSMs: composite/leaf states; unhandled events bubble to parent
  *    (behavioral inheritance — program only differences from the superstate).
- * 3. Entry/exit actions: run on every enter/leave regardless of which transition
- *    was taken (outermost→innermost on entry, reverse on exit for hierarchy).
+ * 3. Entry/exit / heartbeat as *declared* [Effect]s: pure-ish handlers return
+ *    next leaf + effects; the context boundary interprets them (log, counters).
  *
  * Domain vignette: a network connection with hierarchy
  *   Offline (leaf)
@@ -19,6 +21,9 @@ import fsm.sample.logging.TransitionLog
  *     └── Transferring (leaf)
  *
  * Events unhandled in Idle/Transferring may still be handled by Online.
+ *
+ * Export product evaluation probes [onEvent] for next-state only; effects are
+ * a runtime-boundary concern (not added to export tables).
  */
 
 /** Closed event alphabet for the connection machine. */
@@ -35,11 +40,17 @@ sealed class ConnEvent {
 
 /**
  * PURPOSE: Result of handling an event in a state object.
- * - [Handled] carries the next leaf state (and optionally records heartbeat side effects).
+ * - [Handled] carries the next leaf state and any effects declared by the handler
+ *   (e.g. [Effect.IncHeartbeat]); entry/exit/transition effects are assembled
+ *   by the context boundary when replacing state.
  * - [Unhandled] means "delegate to parent" (hierarchical discipline).
  */
 sealed class HandleResult {
-    data class Handled(val next: ConnState) : HandleResult()
+    data class Handled(
+        val next: ConnState,
+        val effects: List<Effect> = emptyList(),
+    ) : HandleResult()
+
     data object Unhandled : HandleResult()
 }
 
@@ -48,25 +59,25 @@ sealed class HandleResult {
  *
  * [parent] links form the superstate chain. Leaf states override [onEvent];
  * composite Online also handles events that leaves leave unhandled.
- * [onEnter]/[onExit] are the guaranteed setup/teardown hooks.
+ * Entry/exit are pure effect *declarations* ([enterEffects]/[exitEffects]);
+ * the context boundary runs them via [EffectInterpreter].
  */
 sealed class ConnState {
     abstract val name: String
     open val parent: ConnState? get() = null
 
-    /** Entry action: guaranteed init when this state is entered. */
-    open fun onEnter(ctx: ConnectionContext) {
-        ctx.log?.recordEntry(ctx.machineName, name)
-    }
+    /** PURPOSE: Pure entry effect declaration (no I/O). */
+    open fun enterEffects(machineName: String): List<Effect> =
+        listOf(Effect.LogEntry(machineName, name))
 
-    /** Exit action: guaranteed cleanup when this state is left. */
-    open fun onExit(ctx: ConnectionContext) {
-        ctx.log?.recordExit(ctx.machineName, name)
-    }
+    /** PURPOSE: Pure exit effect declaration (no I/O). */
+    open fun exitEffects(machineName: String): List<Effect> =
+        listOf(Effect.LogExit(machineName, name))
 
     /**
      * PURPOSE: Per-state behavior. Default is Unhandled so events bubble up.
      * Leaves and composites override only the events they care about.
+     * Must not mutate log/counters — declare effects on [HandleResult.Handled].
      */
     open fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult =
         HandleResult.Unhandled
@@ -95,9 +106,8 @@ data object Online : ConnState() {
     override fun onEvent(ctx: ConnectionContext, event: ConnEvent): HandleResult = when (event) {
         ConnEvent.Disconnect -> HandleResult.Handled(Offline)
         ConnEvent.Heartbeat -> {
-            // Superstate-only reaction: stay in the current leaf, but count heartbeat.
-            ctx.heartbeatCount += 1
-            HandleResult.Handled(ctx.current)
+            // Superstate-only reaction: stay in current leaf; declare heartbeat effect.
+            HandleResult.Handled(ctx.current, listOf(Effect.IncHeartbeat))
         }
         else -> HandleResult.Unhandled
     }
@@ -131,9 +141,16 @@ data object Transferring : ConnState() {
  *
  * Transition algorithm (ordinary code, not an engine):
  * 1. Try current leaf; if Unhandled, walk parent chain until Handled or root.
- * 2. If still Unhandled, refuse (log) and keep state.
- * 3. If Handled with a different next state, exit path from leaf up to LCA,
- *    then enter path down to the new leaf.
+ * 2. If still Unhandled, refuse (declare LogRefusal effect) and keep state.
+ * 3. If Handled with a different next state:
+ *    - Assemble effects via [planTransition]: exit (while still in old leaf) →
+ *      LogTransition → handler effects → enter (UML-style placement).
+ *    - [EffectInterpreter.apply] while [current] is still the old leaf
+ *      ("exit while still in old state").
+ *    - Assign [current] = next only after effects are applied.
+ * 4. Same-leaf Handled (e.g. Heartbeat): handler effects + LogTransition, then apply
+ *    (no state assignment). Same-leaf is the intended home for handler-only effects
+ *    such as [Effect.IncHeartbeat]; state-changing handlers use [planTransition].
  */
 class ConnectionContext(
     initial: ConnState = Offline,
@@ -143,12 +160,17 @@ class ConnectionContext(
     var current: ConnState = initial
         private set
 
-    /** Side-effect counter used by Online.Heartbeat (superstate-only reaction). */
+    /**
+     * Heartbeat counter applied only at the effect boundary (not in onEvent).
+     * Private setter so handlers cannot bypass [EffectInterpreter] via mutation.
+     */
     var heartbeatCount: Int = 0
+        private set
 
     init {
         // Enter the full ancestry of the initial state outermost → innermost.
-        enterPath(pathFromRoot(initial))
+        val effects = pathFromRoot(initial).flatMap { it.enterEffects(machineName) }
+        applyEffects(effects)
     }
 
     /**
@@ -160,26 +182,34 @@ class ConnectionContext(
         val result = dispatchWithDelegation(fromLeaf, event)
         return when (result) {
             is HandleResult.Unhandled -> {
-                log?.recordRefusal(
-                    machine = machineName,
-                    state = fromLeaf.name,
-                    event = event.label(),
-                    reason = "no state in hierarchy accepted event",
+                applyEffects(
+                    listOf(
+                        Effect.LogRefusal(
+                            machine = machineName,
+                            state = fromLeaf.name,
+                            event = event.label(),
+                            reason = "no state in hierarchy accepted event",
+                        ),
+                    ),
                 )
                 false
             }
             is HandleResult.Handled -> {
                 val next = result.next
                 if (next !== fromLeaf) {
-                    transitionTo(fromLeaf, next, event)
+                    // Real transition: apply exit/transition/enter while still in fromLeaf.
+                    val effects = planTransition(fromLeaf, next, event, result.effects)
+                    applyEffects(effects)
+                    current = next
                 } else {
-                    // Same leaf (e.g. Heartbeat): still record a logical transition for observability.
-                    log?.recordTransition(
+                    // Same leaf (e.g. Heartbeat): handler effects + observability.
+                    val effects = result.effects + Effect.LogTransition(
                         machine = machineName,
                         from = fromLeaf.name,
                         event = event.label(),
                         to = next.name,
                     )
+                    applyEffects(effects)
                 }
                 true
             }
@@ -202,37 +232,52 @@ class ConnectionContext(
     }
 
     /**
-     * PURPOSE: Exit current path, enter new path with LCA discipline.
-     * Exit: innermost → outermost (leaf first). Enter: outermost → innermost.
+     * PURPOSE: Pure assembly of hierarchical transition effects (LCA discipline).
+     *
+     * Order (UML-style): exit (innermost→outermost, exclusive of LCA) →
+     * [Effect.LogTransition] → [handlerEffects] (transition actions) →
+     * enter (outermost→innermost, exclusive of LCA).
+     *
+     * Does not assign [current] or apply effects — safe for tests to inspect
+     * full Offline→Idle lists without going through the applying boundary.
      */
-    private fun transitionTo(from: ConnState, to: ConnState, event: ConnEvent) {
+    fun planTransition(
+        from: ConnState,
+        to: ConnState,
+        event: ConnEvent,
+        handlerEffects: List<Effect> = emptyList(),
+    ): List<Effect> {
         val fromPath = pathFromRoot(from)
         val toPath = pathFromRoot(to)
         val lcaIndex = commonPrefixLength(fromPath, toPath)
+        val effects = mutableListOf<Effect>()
 
         // Exit states exclusive of LCA, from leaf toward root.
         for (i in fromPath.lastIndex downTo lcaIndex) {
-            fromPath[i].onExit(this)
+            effects += fromPath[i].exitEffects(machineName)
         }
 
-        log?.recordTransition(
+        effects += Effect.LogTransition(
             machine = machineName,
             from = from.name,
             event = event.label(),
             to = to.name,
         )
 
+        // Handler / transition-action effects between exit and enter.
+        effects += handlerEffects
+
         // Enter states exclusive of LCA, from root toward leaf.
         for (i in lcaIndex until toPath.size) {
-            toPath[i].onEnter(this)
+            effects += toPath[i].enterEffects(machineName)
         }
 
-        current = to
+        return effects
     }
 
-    private fun enterPath(path: List<ConnState>) {
-        for (s in path) {
-            s.onEnter(this)
+    private fun applyEffects(effects: List<Effect>) {
+        EffectInterpreter.apply(effects, log) {
+            heartbeatCount += 1
         }
     }
 

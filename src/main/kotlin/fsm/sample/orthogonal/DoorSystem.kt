@@ -1,5 +1,8 @@
 package fsm.sample.orthogonal
 
+import fsm.sample.effect.Effect
+import fsm.sample.effect.EffectInterpreter
+import fsm.sample.effect.StepResult
 import fsm.sample.logging.TransitionLog
 
 /**
@@ -16,7 +19,9 @@ import fsm.sample.logging.TransitionLog
  *   Region B (SwingMachine):  Closed ↔ Open
  *
  * Container [DoorSystem] dispatches external events to the appropriate component(s).
- * Consistent logging records every region mode change through [TransitionLog].
+ * Component steps declare [Effect.LogTransition]; container guards declare
+ * [Effect.LogRefusal] via pure [guardRefusalEffects]. Same effect list vocabulary
+ * as flat/CSP/GoF — no product rewrite.
  */
 
 // --- Region A: Latch ---------------------------------------------------------
@@ -38,8 +43,8 @@ sealed class LatchEvent {
 
 /**
  * PURPOSE: Independent component machine for the latch region.
- * Pure transition + assignment logging — same flat discipline as TrafficLight,
- * kept separate so the orthogonal container composes objects, not product states.
+ * Pure transition + pure step with LogTransition effect; boundary interprets.
+ * Kept separate so the orthogonal container composes objects, not product states.
  */
 class LatchMachine(
     initial: LatchState = LatchState.Locked,
@@ -54,11 +59,32 @@ class LatchMachine(
         LatchEvent.Unlock -> LatchState.Unlocked
     }
 
+    /**
+     * PURPOSE: Pure step for the latch region (next + LogTransition effect).
+     * Export still uses [pureTransition] for next-state-only product tables.
+     */
+    fun step(
+        state: LatchState,
+        event: LatchEvent,
+    ): StepResult<LatchState> {
+        val next = pureTransition(state, event)
+        return StepResult(
+            next = next,
+            effects = listOf(
+                Effect.LogTransition(
+                    machine = machineName,
+                    from = state.label(),
+                    event = event.label(),
+                    to = next.label(),
+                ),
+            ),
+        )
+    }
+
     fun handle(event: LatchEvent): LatchState {
-        val from = current
-        val next = pureTransition(from, event)
-        current = next
-        log?.recordTransition(machineName, from.label(), event.label(), next.label())
+        val result = step(current, event)
+        current = result.next
+        EffectInterpreter.apply(result.effects, log)
         return current
     }
 }
@@ -98,11 +124,29 @@ class SwingMachine(
         SwingEvent.CloseDoor -> SwingState.Closed
     }
 
+    /** PURPOSE: Pure step for the swing region (next + LogTransition effect). */
+    fun step(
+        state: SwingState,
+        event: SwingEvent,
+    ): StepResult<SwingState> {
+        val next = pureTransition(state, event)
+        return StepResult(
+            next = next,
+            effects = listOf(
+                Effect.LogTransition(
+                    machine = machineName,
+                    from = state.label(),
+                    event = event.label(),
+                    to = next.label(),
+                ),
+            ),
+        )
+    }
+
     fun handle(event: SwingEvent): SwingState {
-        val from = current
-        val next = pureTransition(from, event)
-        current = next
-        log?.recordTransition(machineName, from.label(), event.label(), next.label())
+        val result = step(current, event)
+        current = result.next
+        EffectInterpreter.apply(result.effects, log)
         return current
     }
 }
@@ -130,7 +174,8 @@ sealed class DoorEvent {
  * - Close → SwingMachine
  *
  * Product configuration is observed as (latch × swing) without implementing a
- * flat 4-state product machine.
+ * flat 4-state product machine. Guards use pure [guardRefusalEffects]; boundary
+ * [handle] interprets refusals or delegates to component [handle].
  */
 class DoorSystem(
     val log: TransitionLog = TransitionLog(),
@@ -144,44 +189,67 @@ class DoorSystem(
         "latch=${latch.current.label()}, swing=${swing.current.label()}"
 
     /**
+     * PURPOSE: Pure container guard — returns LogRefusal effects when policy
+     * blocks [event], empty list when the event may be dispatched to a region.
+     * Does not mutate state or log; tests assert the list without the boundary.
+     */
+    fun guardRefusalEffects(
+        event: DoorEvent,
+        latchState: LatchState = latch.current,
+        swingState: SwingState = swing.current,
+        config: String = "latch=${latchState.label()}, swing=${swingState.label()}",
+    ): List<Effect> = when (event) {
+        DoorEvent.Open ->
+            if (latchState is LatchState.Locked) {
+                listOf(
+                    Effect.LogRefusal(
+                        machine = machineName,
+                        state = config,
+                        event = event.label(),
+                        reason = "cannot open while locked",
+                    ),
+                )
+            } else {
+                emptyList()
+            }
+        DoorEvent.Lock ->
+            if (swingState is SwingState.Open) {
+                listOf(
+                    Effect.LogRefusal(
+                        machine = machineName,
+                        state = config,
+                        event = event.label(),
+                        reason = "cannot lock while door is open",
+                    ),
+                )
+            } else {
+                emptyList()
+            }
+        DoorEvent.Unlock, DoorEvent.Close -> emptyList()
+    }
+
+    /**
      * Dispatch an external event into the appropriate orthogonal component(s).
      * @return true if the event was accepted by a component (or fully applied)
      */
     fun handle(event: DoorEvent): Boolean {
+        val refusal = guardRefusalEffects(event)
+        if (refusal.isNotEmpty()) {
+            EffectInterpreter.apply(refusal, log)
+            return false
+        }
         return when (event) {
             DoorEvent.Unlock -> {
                 latch.handle(LatchEvent.Unlock)
                 true
             }
             DoorEvent.Lock -> {
-                // Policy: cannot lock while open — refuse at container level.
-                if (swing.current is SwingState.Open) {
-                    log.recordRefusal(
-                        machineName,
-                        configuration(),
-                        event.label(),
-                        reason = "cannot lock while door is open",
-                    )
-                    false
-                } else {
-                    latch.handle(LatchEvent.Lock)
-                    true
-                }
+                latch.handle(LatchEvent.Lock)
+                true
             }
             DoorEvent.Open -> {
-                // Guarded coupling between regions without product-state explosion.
-                if (latch.current is LatchState.Locked) {
-                    log.recordRefusal(
-                        machineName,
-                        configuration(),
-                        event.label(),
-                        reason = "cannot open while locked",
-                    )
-                    false
-                } else {
-                    swing.handle(SwingEvent.OpenDoor)
-                    true
-                }
+                swing.handle(SwingEvent.OpenDoor)
+                true
             }
             DoorEvent.Close -> {
                 swing.handle(SwingEvent.CloseDoor)
