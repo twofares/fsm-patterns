@@ -3,7 +3,7 @@ package fsm.sample.export
 import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
-import fsm.sample.csp.exportLabels
+import fsm.sample.csp.exportLabel
 import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.StepResult
 import fsm.sample.effect.exportLabels
@@ -13,6 +13,7 @@ import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnState
+import fsm.sample.gof.ConnectionEffect
 import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
@@ -20,7 +21,8 @@ import fsm.sample.gof.Online
 import fsm.sample.gof.Transferring
 import fsm.sample.gof.declaredEffects
 import fsm.sample.gof.dispatchWithDelegation
-import fsm.sample.gof.exportLabels
+import fsm.sample.gof.exportLabel
+import fsm.sample.machine.FragmentedStepEffects
 import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
@@ -37,6 +39,11 @@ import fsm.sample.orthogonal.exportLabel
  * offer / hierarchy functions (never re-implements rules), and builds
  * [TransitionTable] rows including short effect labels. Stdlib-only: no
  * reflection; domains listed explicitly from sealed sets.
+ *
+ * Shared helpers:
+ * - [productEvaluateTotal] — total flat / region steps ([StepResult])
+ * - [productEvaluateOffer] — partial / menu steps ([OfferOutcome])
+ * - [productEvaluateHierarchy] — leaf × event via probe + [FragmentedStepEffects]
  *
  * Never calls per-machine interpreters, handle, or offer during export — only
  * pure step / stepOffer / planTransition / declaredEffects, plus pure hierarchical
@@ -74,6 +81,99 @@ fun <S, Ev, D> productEvaluateTotal(
     return TransitionTable(machine, rows)
 }
 
+/**
+ * PURPOSE: Evaluate a partial / menu pure offer on the Cartesian product.
+ *
+ * [OfferOutcome.Accepted] → [TransitionKind.ACCEPTED] (domain labels included).
+ * [OfferOutcome.Refused] → [TransitionKind.REFUSED] (cross-cutting only; no domain).
+ * Caller supplies the pure [stepOffer]; export never calls boundary [applyOffer].
+ */
+fun <S, E, D> productEvaluateOffer(
+    machine: String,
+    states: List<S>,
+    events: List<E>,
+    stateLabel: (S) -> String,
+    eventLabel: (E) -> String,
+    stepOffer: (S, E) -> OfferOutcome<S, D>,
+    domainLabel: (D) -> String,
+    refusalNote: String = "not in menu",
+): TransitionTable {
+    val rows = mutableListOf<TransitionRow>()
+    for (s in states) {
+        for (e in events) {
+            when (val result = stepOffer(s, e)) {
+                is OfferOutcome.Accepted -> rows += TransitionRow(
+                    from = stateLabel(s),
+                    event = eventLabel(e),
+                    to = stateLabel(result.next),
+                    kind = TransitionKind.ACCEPTED,
+                    effects = result.exportLabels(domainLabel),
+                )
+                is OfferOutcome.Refused -> rows += TransitionRow(
+                    from = stateLabel(s),
+                    event = eventLabel(e),
+                    to = stateLabel(result.next),
+                    kind = TransitionKind.REFUSED,
+                    effects = result.exportLabels(domainLabel),
+                    note = refusalNote,
+                )
+            }
+        }
+    }
+    return TransitionTable(machine, rows)
+}
+
+/**
+ * PURPOSE: Evaluate hierarchical leaf × event product via pure probe + declared effects.
+ *
+ * [probe] yields a vignette handle-result [R] (e.g. Connection [HandleResult]).
+ * [declaredEffects] stays **caller-supplied** so same-leaf / refuse policy remains
+ * outside this helper. Never constructs context classes that run init side effects.
+ *
+ * Unhandled → [TransitionKind.REFUSED] self-successor with [refusalNote].
+ * Handled → [TransitionKind.ACCEPTED] with [nextOf] and fragmented export labels.
+ */
+fun <S, E, D, R> productEvaluateHierarchy(
+    machine: String,
+    leaves: List<S>,
+    events: List<E>,
+    stateLabel: (S) -> String,
+    eventLabel: (E) -> String,
+    probe: (S, E) -> R,
+    isUnhandled: (R) -> Boolean,
+    nextOf: (R) -> S,
+    declaredEffects: (S, E, R) -> FragmentedStepEffects<D>,
+    domainLabel: (D) -> String,
+    refusalNote: String = "no state in hierarchy accepted event",
+): TransitionTable {
+    val rows = mutableListOf<TransitionRow>()
+    for (leaf in leaves) {
+        for (event in events) {
+            val result = probe(leaf, event)
+            val effects = declaredEffects(leaf, event, result)
+            if (isUnhandled(result)) {
+                rows += TransitionRow(
+                    from = stateLabel(leaf),
+                    event = eventLabel(event),
+                    to = stateLabel(leaf),
+                    kind = TransitionKind.REFUSED,
+                    effects = effects.exportLabels(domainLabel),
+                    note = refusalNote,
+                )
+            } else {
+                rows += TransitionRow(
+                    from = stateLabel(leaf),
+                    event = eventLabel(event),
+                    to = stateLabel(nextOf(result)),
+                    kind = TransitionKind.ACCEPTED,
+                    effects = effects.exportLabels(domainLabel),
+                )
+            }
+        }
+    }
+    return TransitionTable(machine, rows)
+}
+
 // --- Sample machines: product evaluation via shipped pure APIs ---------------
 
 /**
@@ -92,37 +192,20 @@ fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
 
 /**
  * PURPOSE: Complete CSP table for FileProtocol via pure [FileProtocol.stepOffer].
- * Non-menu alphabet events are REFUSED with audit refusals (domain empty).
- * No [FileProtocol.offer] / interpreter — pure product only.
+ * Thin adapter over [productEvaluateOffer]. No [FileProtocol.offer] / interpreter.
  */
 fun evaluateFileProtocol(): TransitionTable {
     // Stateless probe instance: only pure methods are used.
     val protocol = FileProtocol()
-    val states = listOf(FileState.Closed, FileState.Opened)
-    val alphabet = listOf(FileEvent.Open, FileEvent.Read, FileEvent.Close)
-    val rows = mutableListOf<TransitionRow>()
-    for (s in states) {
-        for (e in alphabet) {
-            when (val result = protocol.stepOffer(s, e)) {
-                is OfferOutcome.Accepted -> rows += TransitionRow(
-                    from = s.label(),
-                    event = e.label(),
-                    to = result.next.label(),
-                    kind = TransitionKind.ACCEPTED,
-                    effects = result.exportLabels(),
-                )
-                is OfferOutcome.Refused -> rows += TransitionRow(
-                    from = s.label(),
-                    event = e.label(),
-                    to = result.next.label(),
-                    kind = TransitionKind.REFUSED,
-                    effects = result.exportLabels(),
-                    note = "not in menu",
-                )
-            }
-        }
-    }
-    return TransitionTable("FileProtocol", rows)
+    return productEvaluateOffer(
+        machine = "FileProtocol",
+        states = listOf(FileState.Closed, FileState.Opened),
+        events = listOf(FileEvent.Open, FileEvent.Read, FileEvent.Close),
+        stateLabel = { it.label() },
+        eventLabel = { it.label() },
+        stepOffer = { s, e -> protocol.stepOffer(s, e) },
+        domainLabel = { it.exportLabel() },
+    )
 }
 
 /**
@@ -160,45 +243,27 @@ fun evaluateSwingRegion(): TransitionTable {
 /**
  * PURPOSE: Hierarchical product for Connection via leaf × event probing.
  *
- * Uses pure [dispatchWithDelegation] for next-state (no [ConnectionContext]),
- * then pure [declaredEffects] (planTransition / same-leaf / refusal audit).
- * Never calls handle or apply sinks — export-safe.
+ * Thin adapter over [productEvaluateHierarchy]: pure [probeConnection] +
+ * vignette-local [declaredEffects]. Never calls handle or apply sinks.
  */
-fun evaluateConnectionHierarchy(): TransitionTable {
-    val leaves = connectionLeaves()
-    val events = listOf(
+fun evaluateConnectionHierarchy(): TransitionTable = productEvaluateHierarchy(
+    machine = "Connection",
+    leaves = connectionLeaves(),
+    events = listOf(
         ConnEvent.Connect,
         ConnEvent.Disconnect,
         ConnEvent.StartTransfer,
         ConnEvent.FinishTransfer,
         ConnEvent.Heartbeat,
-    )
-    val rows = mutableListOf<TransitionRow>()
-    for (leaf in leaves) {
-        for (event in events) {
-            val result = probeConnection(leaf, event)
-            val effects = declaredEffects(leaf, event, result)
-            when (result) {
-                is HandleResult.Handled -> rows += TransitionRow(
-                    from = leaf.name,
-                    event = event.label(),
-                    to = result.next.name,
-                    kind = TransitionKind.ACCEPTED,
-                    effects = effects.exportLabels(),
-                )
-                HandleResult.Unhandled -> rows += TransitionRow(
-                    from = leaf.name,
-                    event = event.label(),
-                    to = leaf.name,
-                    kind = TransitionKind.REFUSED,
-                    effects = effects.exportLabels(),
-                    note = "no state in hierarchy accepted event",
-                )
-            }
-        }
-    }
-    return TransitionTable("Connection", rows)
-}
+    ),
+    stateLabel = { it.name },
+    eventLabel = { it.label() },
+    probe = { leaf, event -> probeConnection(leaf, event) },
+    isUnhandled = { it is HandleResult.Unhandled },
+    nextOf = { (it as HandleResult.Handled).next },
+    declaredEffects = { leaf, event, result -> declaredEffects(leaf, event, result) },
+    domainLabel = ConnectionEffect::exportLabel,
+)
 
 /**
  * PURPOSE: Pure hierarchical probe — no context, no interpreters, no ports.
