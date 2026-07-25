@@ -34,6 +34,8 @@ import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
 import fsm.sample.orthogonal.SwingState
+import fsm.sample.testsupport.assertRefuseHasNoDomain
+import fsm.sample.testsupport.assertRefusedOutcomeHasNoDomain
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -41,6 +43,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * PURPOSE: Prove multi-family cross-cutting + domain ports via shipped APIs.
+ * Refuse-without-domain checks use [fsm.sample.testsupport] helpers where applicable.
  */
 class EffectStepTest {
 
@@ -88,13 +91,13 @@ class EffectStepTest {
     fun `File refuse is cross-cutting multi-family without domain IO`() {
         val p = FileProtocol()
         val refused = p.stepOffer(FileState.Closed, FileEvent.Read)
-        assertTrue(refused is OfferOutcome.Refused)
+        assertRefusedOutcomeHasNoDomain(refused)
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Audit.LogRefusal })
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "csp.refuse" })
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Trace.Span })
         val env = CrossCuttingEnv()
         CrossCuttingInterpreter.apply(refused.crossCutting, env)
-        assertTrue(p.port.ops.isEmpty())
+        assertRefuseHasNoDomain(p.port.ops)
         assertEquals(1, env.metrics.get("csp.refuse"))
         assertTrue(env.traces.spans.isNotEmpty())
     }

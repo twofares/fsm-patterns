@@ -9,8 +9,9 @@ package fsm.sample.effect
  * Cross-cutting is **not** audit-only: audit, metrics, and tracing all share
  * [crossCutting]. Domain ADTs never nest cross-cutting cases.
  *
- * Pure steps only declare; boundaries call [CrossCuttingInterpreter.apply] + applyDomain.
- * Export labels = cross-cutting labels + domain labels.
+ * Pure steps only declare; boundaries call [fsm.sample.machine.applyAccepted]
+ * (total) — not [OfferOutcome] (refuse-capable). Export labels = cross-cutting + domain.
+ * Kind matrix: project README.
  */
 data class StepResult<S, D>(
     val next: S,

@@ -15,6 +15,10 @@ package fsm.sample.effect
  * [extras] carries **machine-specific** metrics/traces — required for non-toy machines
  * (e.g. `csp.accept`, `light.ticks`, `door.latch.unlock`). Never drop extras when
  * migrating call sites.
+ *
+ * Boundary apply of these lists: [fsm.sample.machine.applyAccepted] /
+ * [fsm.sample.machine.applyOffer] / [fsm.sample.machine.applyFragments].
+ * How to add a machine: project README.
  */
 
 /**

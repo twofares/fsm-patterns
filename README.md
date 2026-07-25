@@ -26,10 +26,116 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 | `src/main/kotlin/fsm/sample/gof/` | Hierarchical Connection + session domain |
 | `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal door regions + actuators |
 | `src/main/kotlin/fsm/sample/csp/` | CSP file protocol + I/O domain intents |
-| `src/main/kotlin/fsm/sample/effect/` | **Generalized** `CrossCuttingEffect` + env + interpreter; `StepResult` |
+| `src/main/kotlin/fsm/sample/effect/` | Dual-sink outcomes, CC vocabulary, bundles, env, interpreter |
+| `src/main/kotlin/fsm/sample/machine/` | Boundary apply + hierarchy structure (not an engine) |
 | `src/main/kotlin/fsm/sample/logging/` | Transition audit log (one cross-cutting sink) |
 | `src/main/kotlin/fsm/sample/export/` | Product evaluation → Markdown + Mermaid |
 | `DemoMain.kt` / `ExportMain.kt` | Dual-surface demos |
+| `docs/machine-authoring-surfaces.md` | Full design / agent checklist (PR surfaces) |
+
+## Machine kinds (matrix)
+
+| Kind | Sample | Pure surface | Boundary helper | Export helper |
+|------|--------|--------------|-----------------|---------------|
+| **Flat (total)** | TrafficLight | `step(S,E) → StepResult` | `applyAccepted` | `productEvaluateTotal` |
+| **CSP / partial** | FileProtocol | `stepOffer(S,E) → OfferOutcome` | `applyOffer` | `productEvaluateOffer` |
+| **Hierarchical** | Connection | `dispatchWithDelegation` + `declaredEffects` → fragments | `applyFragments` then assign | `productEvaluateHierarchy` |
+| **Orthogonal** | DoorSystem | Region `step` → `StepResult` (+ container pure guards) | Region: `applyAccepted`; container refuse is CC-only | Compose region tables (`exportDoorSystem`) |
+
+**Outcome choice (critical):**
+
+- **Total** machines (every event accepted from every state) → `StepResult` + `applyAccepted`.
+- **Refuse-capable** machines (menus, guards, partial alphabets) → `OfferOutcome` (`Accepted` may carry domain; `Refused` has **no** domain field) + `applyOffer`.
+- **Hierarchy** keeps vignette-local `HandleResult` / `declaredEffects`; shared structure is fragments + LCA helpers — **not** flattened into one `StepResult`.
+
+## Two boundary families (do not unify)
+
+| Family | Helpers | State assign vs apply | Used by |
+|--------|---------|----------------------|---------|
+| **Assign-then-apply** | `applyAccepted`, `applyOffer` | Assign `current = next` **first**, then cross-cutting, then domain (if any) | Flat, orthogonal regions, CSP offer |
+| **Apply-then-assign** | `applyFragments` only | Apply per-fragment CC then domain **while still on old leaf**, then caller assigns if leaf changed | Hierarchical Connection |
+
+Hierarchical machines must **not** call `applyAccepted`: that assigns before exit effects and flattens per-fragment CC↔domain pairing (e.g. Online enter next to `OpenSession`).
+
+```text
+Total / offer:  pure step → assign → CrossCuttingInterpreter → applyDomain
+Hierarchy:      pure plan → for each fragment (CC → domain) → assign leaf
+```
+
+## Shared authoring surfaces (pointers)
+
+| Concern | Where |
+|---------|--------|
+| Dual-sink boundary apply | [`machine/BoundaryApply.kt`](src/main/kotlin/fsm/sample/machine/BoundaryApply.kt) — `applyAccepted` / `applyOffer` / `applyFragments` |
+| Accept / refuse CC bundles | [`effect/CrossCuttingBundles.kt`](src/main/kotlin/fsm/sample/effect/CrossCuttingBundles.kt) — `acceptTransitionCrossCutting` / `refuseCrossCutting` (**pass machine `extras` / `traceDetail`**) |
+| Hierarchy path / LCA / plan | [`machine/Hierarchy.kt`](src/main/kotlin/fsm/sample/machine/Hierarchy.kt) — `pathFromRoot`, `commonPrefixLength`, `planTransition`, `dispatchWithDelegation` |
+| Fragment shapes | [`machine/FragmentedEffects.kt`](src/main/kotlin/fsm/sample/machine/FragmentedEffects.kt) |
+| Pure outcomes | [`effect/StepResult.kt`](src/main/kotlin/fsm/sample/effect/StepResult.kt), [`effect/OfferOutcome.kt`](src/main/kotlin/fsm/sample/effect/OfferOutcome.kt) |
+| Product export | [`export/ProductEvaluator.kt`](src/main/kotlin/fsm/sample/export/ProductEvaluator.kt), [`export/SampleExports.kt`](src/main/kotlin/fsm/sample/export/SampleExports.kt) |
+| Full design doc | [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) |
+| Shared dual-sink test helpers | [`src/test/kotlin/fsm/sample/testsupport/`](src/test/kotlin/fsm/sample/testsupport/) |
+
+## How to add a machine
+
+### Checklist (any kind)
+
+1. Sealed **state** + **event** with `label()`.
+2. Machine-local **domain ADT** (if any I/O) with `exportLabel()` — never nest `CrossCuttingEffect`.
+3. Domain **port** + `applyDomainX` — only place that mutates domain hardware/session I/O.
+4. **Pure** step surface matching kind (below). Pure code must not touch env/port/log.
+5. **Boundary** only via the kind-correct shared `apply*` helper.
+6. Cross-cutting via `acceptTransitionCrossCutting` / `refuseCrossCutting` **with machine-specific extras**.
+7. **Export:** explicit domain lists + product helper + optional Mermaid; never construct side-effecting context classes for export (`ConnectionContext` runs entry on `init`).
+8. **Tests:** pure-API vs export row parity; refuse has no domain; handle mutates env/port; purity of step.
+
+### Total flat (copy TrafficLight)
+
+1. Skeleton: `flat/TrafficLight.kt` + `LightEffect.kt`.
+2. `step(S,E) → StepResult` with `acceptTransitionCrossCutting(..., extras = …)` + domain list.
+3. Boundary: `applyAccepted(...)`.
+4. Export: `productEvaluateTotal` + `exportX` + **manual** registration (below).
+
+### Refuse-capable / CSP (copy FileProtocol)
+
+1. `stepOffer(S,E) → OfferOutcome` — construct/`is`/`when` on **`OfferOutcome.Accepted` / `Refused`** (not `OfferStep.*`; typealias is signature-only).
+2. Refuse via `refuseCrossCutting`; accept extras include machine metrics (e.g. `csp.accept`).
+3. Boundary: `applyOffer` (domain only on Accepted).
+4. Export: `productEvaluateOffer`.
+
+### Hierarchical (not “copy TrafficLight”)
+
+1. Leaves + parent links; pure `onEvent` / enter / exit fragments.
+2. Vignette-local `declaredEffects` (transition → `planTransition`; refuse package with correct `traceDetail`).
+3. Boundary: **`applyFragments` then assign** if leaf changed — never `applyAccepted`.
+4. Export: `productEvaluateHierarchy` over pure dispatch + declared effects only.
+
+### Orthogonal (copy DoorSystem)
+
+1. Regions use the total-flat recipe + `applyAccepted`.
+2. Container pure guards use `refuseCrossCutting` (CC only; no domain on refuse).
+3. Share one `CrossCuttingEnv` + domain port across regions when teaching process-wide CC.
+
+### Manual `exportAllDocument` registration
+
+Export discovery is **manual**. After adding `exportMyMachine()` / `evaluateMyMachine()`:
+
+1. Wire product evaluation in `ProductEvaluator.kt` (or a thin adapter).
+2. Add `exportMyMachine()` in `SampleExports.kt`.
+3. Append the export to the list inside **`exportAllDocument()`** — there is no classpath registration.
+
+```kotlin
+// SampleExports.kt — edit the list explicitly
+fun exportAllDocument(): String {
+    val parts = listOf(
+        exportTrafficLight(),
+        exportFileProtocol(),
+        exportConnection(),
+        exportDoorSystem(),
+        // exportMyMachine(),  // ← add here
+    )
+    // ...
+}
+```
 
 ## Cross-cutting vs domain effects
 
@@ -45,6 +151,7 @@ Domain effects stay **machine-local** sealed ADTs → machine **ports** (lamp, f
 
 ```text
 StepResult(next, crossCutting: List<CrossCuttingEffect>, domain: List<D>)
+OfferOutcome.Accepted(next, crossCutting, domain) | Refused(reason, next, crossCutting)  // no domain
 ```
 
 | Machine | Example cross-cutting | Domain |
@@ -60,6 +167,18 @@ Export product evaluation reads pure effect **labels** only (no interpreters, no
 
 Hierarchical Connection applies **fragments** (cross-cutting then domain per LCA step) so session domain stays next to Online enter/exit in export order.
 
+## Must / must not (agent defaults)
+
+| Must | Must not |
+|------|----------|
+| Pure step returns `StepResult` / `OfferOutcome` / fragments | Call `CrossCuttingInterpreter` inside pure step |
+| Boundary uses kind-correct shared `apply*` | Apply domain on refuse; route hierarchy through `applyAccepted` |
+| Domain ADT machine-local sealed | Nest `CrossCuttingEffect` in domain ADT |
+| Bundles **with** extras / correct `traceDetail` | Hand-roll audit-only refuse; bare accept without machine metrics |
+| Explicit sealed domain lists for product eval | Reflection over subclasses |
+| Export labels from pure declarations | Export from interpreter side effects |
+| Hierarchy: apply fragments, assign **after** | Flatten all CC then all domain (breaks Online enter pairing) |
+
 ## Export tables
 
 ```bash
@@ -70,3 +189,4 @@ Markdown tables include an **Effects** column (comma-joined labels such as
 `Audit.LogTransition`, `Metric.Inc(fsm.transitions)`, `Trace.Span(...)`, `DriveLamp(Green)`).
 
 Every non-trivial type and path is documented with **PURPOSE** comments in source.
+See also [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) for the full shared-surfaces design.

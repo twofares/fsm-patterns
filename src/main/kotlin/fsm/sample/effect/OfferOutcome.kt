@@ -8,6 +8,7 @@ package fsm.sample.effect
  *
  * Pure steps only declare; boundaries call [fsm.sample.machine.applyOffer].
  * Export labels = cross-cutting labels (+ domain labels when Accepted).
+ * Prefer this over [StepResult] for refuse-capable machines (README kind matrix).
  */
 sealed class OfferOutcome<S, D> {
     abstract val next: S

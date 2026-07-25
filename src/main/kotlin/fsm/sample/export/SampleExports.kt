@@ -85,6 +85,9 @@ fun exportDoorSystem(): MachineExport {
 /**
  * PURPOSE: Full multi-machine export document (tables + Mermaid fences).
  * Deterministic string for demo consistency checks.
+ *
+ * **Manual registration only** — append new `exportX()` entries to [parts] when
+ * adding a machine. No classpath discovery (see README "Manual exportAllDocument registration").
  */
 fun exportAllDocument(): String {
     val parts = listOf(

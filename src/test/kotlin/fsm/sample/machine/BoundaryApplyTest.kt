@@ -13,6 +13,11 @@ import fsm.sample.flat.LightPort
 import fsm.sample.flat.LightState
 import fsm.sample.flat.applyDomainLight
 import fsm.sample.logging.RecordKind
+import fsm.sample.testsupport.assertApplyAcceptedDualSinkOrder
+import fsm.sample.testsupport.assertDualSinksApplied
+import fsm.sample.testsupport.assertRefuseHasNoDomain
+import fsm.sample.testsupport.assertRefusedOutcomeHasNoDomain
+import fsm.sample.testsupport.captureApplyAcceptedOrder
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -22,6 +27,7 @@ import org.junit.jupiter.api.Test
  * and hierarchy must not use [applyAccepted].
  *
  * Fixtures: [LightEffect]/[LightPort] + [CrossCuttingEnv] (existing ADTs/ports).
+ * Shared order/refuse helpers: [fsm.sample.testsupport].
  */
 class BoundaryApplyTest {
 
@@ -33,7 +39,6 @@ class BoundaryApplyTest {
     fun `applyAccepted assigns first then applies dual sinks`() {
         val env = CrossCuttingEnv()
         val port = LightPort()
-        val order = mutableListOf<String>()
         var current: LightState = LightState.Red
 
         val result = StepResult(
@@ -45,28 +50,22 @@ class BoundaryApplyTest {
             domain = listOf(LightEffect.DriveLamp("Green")),
         )
 
-        applyAccepted(
+        val order = captureApplyAcceptedOrder(
             result = result,
             env = env,
             port = port,
-            applyDomain = { domain, p ->
-                // CC has already run by the time domain is invoked (assign → CC → domain).
-                order += if (env.metrics.get("light.ticks") == 1) "cc" else "cc-missing"
-                order += "domain"
-                applyDomainLight(domain, p)
-            },
-            assign = {
-                order += "assign"
-                current = it
-            },
+            applyDomain = { domain, p -> applyDomainLight(domain, p) },
+            assign = { current = it },
+            crossCuttingApplied = { it.metrics.get("light.ticks") == 1 },
         )
 
-        // Total family: assign first, then CC, then domain.
-        assertEquals(listOf("assign", "cc", "domain"), order)
+        // Total family: assign first, then CC, then domain (shared helper).
+        assertApplyAcceptedDualSinkOrder(order)
         assertEquals(LightState.Green, current)
         assertEquals(listOf("Green"), port.commands)
         assertEquals(1, env.log.snapshot().filter { it.kind == RecordKind.TRANSITION }.size)
         assertEquals(1, env.metrics.get("light.ticks"))
+        assertDualSinksApplied(env, domainPortNonEmpty = port.commands.isNotEmpty())
     }
 
     @Test
@@ -152,6 +151,8 @@ class BoundaryApplyTest {
             ),
         )
 
+        assertRefusedOutcomeHasNoDomain(refused)
+
         applyOffer(
             result = refused,
             env = env,
@@ -161,7 +162,7 @@ class BoundaryApplyTest {
         )
 
         assertEquals(0, domainCalls)
-        assertTrue(port.commands.isEmpty())
+        assertRefuseHasNoDomain(port.commands)
         assertEquals(LightState.Red, current)
         assertEquals(1, env.metrics.get("csp.refuse"))
         assertEquals(1, env.log.snapshot().filter { it.kind == RecordKind.REFUSAL }.size)

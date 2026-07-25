@@ -8,6 +8,9 @@ import fsm.sample.effect.acceptTransitionCrossCutting
  *
  * Vignette-local policy stays outside: Connection keeps [declaredEffects], onEvent,
  * enter/exit domain payloads, and Heartbeat/same_leaf metrics.
+ *
+ * Boundary is **apply-then-assign** via [applyFragments] — never [applyAccepted].
+ * See README "Two boundary families" and `docs/machine-authoring-surfaces.md` §5.1 hierarchy steps.
  */
 
 /**
