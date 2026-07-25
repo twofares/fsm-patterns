@@ -3,14 +3,13 @@ package fsm.sample.effect
 /**
  * PURPOSE: Standard multi-family **accept / refuse** cross-cutting list builders.
  *
- * Pure steps currently hand-roll `auditTransition` + `metricInc("fsm.transitions")` +
- * machine extras on accept, and `auditRefusal` + refuse metric + `traceSpan` on refuse.
- * These helpers encode that teaching-standard combination so agents do not invent
- * incomplete packages (e.g. audit-only refuse without metric/trace).
+ * Preferred builders for accept (`auditTransition` + `metricInc("fsm.transitions")` +
+ * machine extras) and refuse (`auditRefusal` + refuse metric + `traceSpan`). Encode
+ * the teaching-standard combination so agents do not invent incomplete packages
+ * (e.g. audit-only refuse without metric/trace).
  *
- * **Additive only** in this PR — production call sites still build lists by hand;
- * fixture tests prove helpers reproduce those lists (including extras and
- * Connection `traceDetail = event.label()`).
+ * TrafficLight and DoorSystem (regions + guards) already call these helpers.
+ * Migrate remaining hand-rolled sites (File, Connection, hierarchy) in later PRs.
  *
  * [extras] carries **machine-specific** metrics/traces — required for non-toy machines
  * (e.g. `csp.accept`, `light.ticks`, `door.latch.unlock`). Never drop extras when

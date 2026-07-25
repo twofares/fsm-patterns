@@ -20,35 +20,47 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * PURPOSE: PR 2 gate — prove [acceptTransitionCrossCutting] / [refuseCrossCutting]
- * rebuild the multi-family lists already declared by pure steps/guards, including
- * machine-specific extras and Connection `traceDetail = event.label()`.
+ * PURPOSE: Prove [acceptTransitionCrossCutting] / [refuseCrossCutting] multi-family
+ * packages (extras, Connection `traceDetail = event.label()`, Door policy span).
  *
- * Production call sites are **not** migrated here; helpers must match hand-built lists.
+ * **Migrated call sites (TrafficLight accept, Door refuse):** pure steps/guards
+ * already call the shared helpers. Equality is against **hand-built expected lists**
+ * from low-level factories (`auditTransition` / `metricInc` / `traceSpan` / …), not
+ * against a second helper invocation alone — so a helper-base regression (drop
+ * `fsm.transitions`, reorder audit/metric) cannot make both sides move together.
+ * Those cases also assert call-site extras/args parity (metric names, trace detail).
+ *
+ * **Unmigrated call sites (File, Connection):** still hand-roll lists. Equality
+ * pure-vs-helper remains an independent golden fixture until later PRs migrate them.
  */
 class CrossCuttingBundlesTest {
 
-    // --- TrafficLight accept (extras: light.ticks / emergency trace) ----------
+    // --- TrafficLight accept (migrated; golden = factory list literals) -------
 
     @Test
     fun `TrafficLight Tick accept list equals helper with light ticks extra`() {
         val from = LightState.Red
         val event = LightEvent.Tick
         val pure = step(from, event)
+        val to = pure.next.label()
+        // Hand-built golden — does not call acceptTransitionCrossCutting
+        val expected = listOf(
+            auditTransition("TrafficLight", from.label(), event.label(), to),
+            metricInc("fsm.transitions"),
+            metricInc("light.ticks"),
+        )
         val viaHelper = acceptTransitionCrossCutting(
             machine = "TrafficLight",
             from = from.label(),
             event = event.label(),
-            to = pure.next.label(),
+            to = to,
             extras = listOf(metricInc("light.ticks")),
         )
-        assertEquals(pure.crossCutting, viaHelper)
-        assertEquals(
-            pure.crossCutting.map { it.exportLabel() },
-            viaHelper.map { it.exportLabel() },
-        )
-        assertTrue(viaHelper.any { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })
-        assertTrue(viaHelper.any { it is CrossCuttingEffect.Metric.Inc && it.name == "fsm.transitions" })
+        assertEquals(expected, pure.crossCutting)
+        assertEquals(expected, viaHelper)
+        assertEquals(expected.map { it.exportLabel() }, pure.crossCutting.map { it.exportLabel() })
+        assertTrue(pure.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })
+        assertTrue(pure.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "fsm.transitions" })
     }
 
     @Test
@@ -56,29 +68,33 @@ class CrossCuttingBundlesTest {
         val from = LightState.Green
         val event = LightEvent.Emergency
         val pure = step(from, event)
+        val to = pure.next.label()
+        val expected = listOf(
+            auditTransition("TrafficLight", from.label(), event.label(), to),
+            metricInc("fsm.transitions"),
+            traceSpan("light.emergency", "forced $to"),
+        )
         val viaHelper = acceptTransitionCrossCutting(
             machine = "TrafficLight",
             from = from.label(),
             event = event.label(),
-            to = pure.next.label(),
-            extras = listOf(traceSpan("light.emergency", "forced ${pure.next.label()}")),
+            to = to,
+            extras = listOf(traceSpan("light.emergency", "forced $to")),
         )
-        assertEquals(pure.crossCutting, viaHelper)
-        assertEquals(
-            pure.crossCutting.map { it.exportLabel() },
-            viaHelper.map { it.exportLabel() },
-        )
+        assertEquals(expected, pure.crossCutting)
+        assertEquals(expected, viaHelper)
+        assertEquals(expected.map { it.exportLabel() }, pure.crossCutting.map { it.exportLabel() })
         assertTrue(
-            viaHelper.any {
+            pure.crossCutting.any {
                 it is CrossCuttingEffect.Trace.Span &&
                     it.name == "light.emergency" &&
                     it.detail == "forced Red"
             },
         )
-        assertTrue(viaHelper.none { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })
+        assertTrue(pure.crossCutting.none { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })
     }
 
-    // --- FileProtocol accept / refuse (extras: csp.accept; refuse csp.refuse) -
+    // --- FileProtocol accept / refuse (unmigrated; pure-vs-helper golden) -----
 
     @Test
     fun `File accept list equals helper with csp accept extra`() {
@@ -128,7 +144,7 @@ class CrossCuttingBundlesTest {
         )
     }
 
-    // --- Door guard refuse (door.refuse metric + door.policy trace) -----------
+    // --- Door guard refuse (migrated; golden = factory list literals) ---------
 
     @Test
     fun `Door Open refuse list equals refuseCrossCutting with door policy trace`() {
@@ -144,6 +160,12 @@ class CrossCuttingBundlesTest {
         )
         assertTrue(pure.isNotEmpty())
         val reason = "cannot open while locked"
+        // Hand-built golden — does not call refuseCrossCutting
+        val expected = listOf(
+            auditRefusal("DoorSystem", config, DoorEvent.Open.label(), reason),
+            metricInc("door.refuse"),
+            traceSpan("door.policy", reason),
+        )
         val viaHelper = refuseCrossCutting(
             machine = "DoorSystem",
             state = config,
@@ -153,16 +175,17 @@ class CrossCuttingBundlesTest {
             traceName = "door.policy",
             // traceDetail defaults to reason
         )
-        assertEquals(pure, viaHelper)
-        assertEquals(pure.map { it.exportLabel() }, viaHelper.map { it.exportLabel() })
+        assertEquals(expected, pure)
+        assertEquals(expected, viaHelper)
+        assertEquals(expected.map { it.exportLabel() }, pure.map { it.exportLabel() })
         assertTrue(
-            viaHelper.any {
+            pure.any {
                 it is CrossCuttingEffect.Trace.Span &&
                     it.name == "door.policy" &&
                     it.detail == reason
             },
         )
-        assertTrue(viaHelper.any { it is CrossCuttingEffect.Metric.Inc && it.name == "door.refuse" })
+        assertTrue(pure.any { it is CrossCuttingEffect.Metric.Inc && it.name == "door.refuse" })
     }
 
     @Test
@@ -179,6 +202,11 @@ class CrossCuttingBundlesTest {
         )
         assertTrue(pure.isNotEmpty())
         val reason = "cannot lock while door is open"
+        val expected = listOf(
+            auditRefusal("DoorSystem", config, DoorEvent.Lock.label(), reason),
+            metricInc("door.refuse"),
+            traceSpan("door.policy", reason),
+        )
         val viaHelper = refuseCrossCutting(
             machine = "DoorSystem",
             state = config,
@@ -187,11 +215,12 @@ class CrossCuttingBundlesTest {
             metricName = "door.refuse",
             traceName = "door.policy",
         )
-        assertEquals(pure, viaHelper)
-        assertEquals(pure.map { it.exportLabel() }, viaHelper.map { it.exportLabel() })
+        assertEquals(expected, pure)
+        assertEquals(expected, viaHelper)
+        assertEquals(expected.map { it.exportLabel() }, pure.map { it.exportLabel() })
     }
 
-    // --- Connection Unhandled refuse (traceDetail = event.label()) ------------
+    // --- Connection Unhandled refuse (unmigrated; pure-vs-helper golden) ------
 
     @Test
     fun `Connection Unhandled refuse list equals helper with event label as traceDetail`() {
