@@ -68,6 +68,9 @@ sealed class HandleResult {
  *
  * Boundary applies [crossCutting] then [domain] of this fragment before the next,
  * so Online enter keeps audit/metric/trace paired with `OpenSession` before Idle.
+ *
+ * Prefer the generic [fsm.sample.machine.EffectFragment] after hierarchy migration (PR 6);
+ * this Connection-local type is the same shape with `D = ConnectionEffect`.
  */
 data class EffectFragment(
     val crossCutting: List<CrossCuttingEffect> = emptyList(),
@@ -79,6 +82,8 @@ data class EffectFragment(
  *
  * Sinks stay typed (audit vs domain) while fragment order preserves LCA interleaving
  * for both export labels and runtime apply. Safe for export — never mutates ports/logs.
+ *
+ * Prefer [fsm.sample.machine.FragmentedStepEffects] after hierarchy migration (PR 6).
  */
 data class ConnectionStepEffects(
     val fragments: List<EffectFragment> = emptyList(),

@@ -31,8 +31,9 @@ import fsm.sample.effect.StepResult
  * Within a fragment, cross-cutting applies before domain so LCA pairing is preserved
  * (e.g. LogEntry(Online) immediately before OpenSession).
  *
- * Generic over domain [D]; Connection's non-generic fragment is the same shape
- * and will migrate here in a later PR.
+ * Generic over domain [D]. Same shape as Connection-local
+ * [fsm.sample.gof.EffectFragment] (fixed `D = ConnectionEffect`); PR 6 migrates
+ * Connection onto this type so agents need not juggle two fragment names.
  */
 data class EffectFragment<D>(
     val crossCutting: List<CrossCuttingEffect> = emptyList(),
@@ -43,7 +44,8 @@ data class EffectFragment<D>(
  * PURPOSE: Ordered hierarchical effect assembly as a list of [EffectFragment]s.
  *
  * Apply via [applyFragments] — never flatten all CC then all domain, and never
- * route through [applyAccepted].
+ * route through [applyAccepted]. Same role as [fsm.sample.gof.ConnectionStepEffects]
+ * until hierarchy migration (PR 6).
  */
 data class FragmentedStepEffects<D>(
     val fragments: List<EffectFragment<D>> = emptyList(),

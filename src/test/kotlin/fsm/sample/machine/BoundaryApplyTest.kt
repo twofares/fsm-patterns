@@ -29,7 +29,7 @@ class BoundaryApplyTest {
     // -------------------------------------------------------------------------
 
     @Test
-    fun `applyAccepted assigns then applies crossCutting then domain`() {
+    fun `applyAccepted assigns first then applies dual sinks`() {
         val env = CrossCuttingEnv()
         val port = LightPort()
         val order = mutableListOf<String>()
@@ -49,6 +49,8 @@ class BoundaryApplyTest {
             env = env,
             port = port,
             applyDomain = { domain, p ->
+                // CC has already run by the time domain is invoked (assign → CC → domain).
+                order += if (env.metrics.get("light.ticks") == 1) "cc" else "cc-missing"
                 order += "domain"
                 applyDomainLight(domain, p)
             },
@@ -58,8 +60,8 @@ class BoundaryApplyTest {
             },
         )
 
-        // Total family: assign first, then sinks (CC before domain via helper body).
-        assertEquals(listOf("assign", "domain"), order)
+        // Total family: assign first, then CC, then domain.
+        assertEquals(listOf("assign", "cc", "domain"), order)
         assertEquals(LightState.Green, current)
         assertEquals(listOf("Green"), port.commands)
         assertEquals(1, env.log.snapshot().filter { it.kind == RecordKind.TRANSITION }.size)
@@ -197,6 +199,14 @@ class BoundaryApplyTest {
             env = env,
             port = port,
             applyDomain = { domain, p ->
+                if (domain.isEmpty()) return@applyFragments
+                // Live probe: this fragment's CC (Online entry + session metric) must already
+                // have been applied before domain OpenSession runs — not reconstructed after.
+                val onlineEntered = env.log.snapshot().any {
+                    it.kind == RecordKind.ENTRY && it.to == "Online"
+                }
+                val sessionMetric = env.metrics.get("connection.session.open") == 1
+                order += if (onlineEntered && sessionMetric) "cc-before-domain" else "cc-missing"
                 for (d in domain) {
                     order += "domain:${(d as LightEffect.DriveLamp).colorLabel}"
                     p.drive(d.colorLabel)
@@ -204,15 +214,15 @@ class BoundaryApplyTest {
             },
         )
 
-        // Per-fragment pairing: Online enter CC immediately before domain OpenSession analogue.
-        val labels = buildApplyOrderLabels(env, port)
-        assertTrue(
-            labels.indexOf("Audit.LogEntry(Online)") < labels.indexOf("DriveLamp(SessionOpen)"),
-            "LogEntry(Online) must precede domain OpenSession within apply order: $labels",
-        )
-        assertEquals(listOf("domain:SessionOpen"), order)
+        assertEquals(listOf("cc-before-domain", "domain:SessionOpen"), order)
         assertEquals(listOf("SessionOpen"), port.commands)
         assertEquals(1, env.metrics.get("connection.session.open"))
+        // Exit Offline ran in an earlier fragment (still present in log before Online).
+        val log = env.log.snapshot()
+        val exitOffline = log.indexOfFirst { it.kind == RecordKind.EXIT && it.from == "Offline" }
+        val enterOnline = log.indexOfFirst { it.kind == RecordKind.ENTRY && it.to == "Online" }
+        val enterIdle = log.indexOfFirst { it.kind == RecordKind.ENTRY && it.to == "Idle" }
+        assertTrue(exitOffline >= 0 && enterOnline > exitOffline && enterIdle > enterOnline)
     }
 
     @Test
@@ -358,34 +368,5 @@ class BoundaryApplyTest {
             orderFragments.first() == "domain" || orderFragments.first().startsWith("leaf"),
             "hierarchy applies effects before assign",
         )
-    }
-
-    // -------------------------------------------------------------------------
-    // helpers
-    // -------------------------------------------------------------------------
-
-    /** Approximate apply-order labels: log records then domain commands (CC applied before domain in helpers). */
-    private fun buildApplyOrderLabels(env: CrossCuttingEnv, port: LightPort): List<String> {
-        val fromLog = env.log.snapshot().map { rec ->
-            when (rec.kind) {
-                RecordKind.EXIT -> "Audit.LogExit(${rec.from ?: rec.to})"
-                RecordKind.ENTRY -> "Audit.LogEntry(${rec.to})"
-                RecordKind.TRANSITION -> "Audit.LogTransition"
-                RecordKind.REFUSAL -> "Audit.LogRefusal"
-            }
-        }
-        val fromDomain = port.commands.map { "DriveLamp($it)" }
-        // Within each fragment CC then domain; across fragments we only need Online before OpenSession.
-        // Reconstruct from actual sinks: exits/entries are sequential in the log; domain appends after its fragment CC.
-        // For the Offline→online→idle fixture, log is Exit(Offline), Entry(Online), Entry(Idle) and domain is SessionOpen.
-        // Insert domain after Online entry by position: metrics prove Online enter CC ran; use index of Online entry.
-        val labels = fromLog.toMutableList()
-        val onlineIdx = labels.indexOf("Audit.LogEntry(Online)")
-        if (onlineIdx >= 0 && fromDomain.isNotEmpty()) {
-            labels.addAll(onlineIdx + 1, fromDomain)
-        } else {
-            labels.addAll(fromDomain)
-        }
-        return labels
     }
 }
