@@ -3,7 +3,6 @@ package fsm.sample.effect
 import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
-import fsm.sample.csp.OfferStep
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
 import fsm.sample.flat.step
@@ -100,7 +99,7 @@ class CrossCuttingBundlesTest {
     fun `File accept list equals helper with csp accept extra`() {
         val protocol = FileProtocol()
         val pure = protocol.stepOffer(FileState.Closed, FileEvent.Open)
-        assertTrue(pure is OfferStep.Accepted)
+        assertTrue(pure is OfferOutcome.Accepted)
         val viaHelper = acceptTransitionCrossCutting(
             machine = "FileProtocol",
             from = FileState.Closed.label(),
@@ -120,8 +119,8 @@ class CrossCuttingBundlesTest {
     fun `File refuse list equals refuseCrossCutting with csp refuse defaults`() {
         val protocol = FileProtocol()
         val pure = protocol.stepOffer(FileState.Closed, FileEvent.Read)
-        assertTrue(pure is OfferStep.Refused)
-        val refused = pure as OfferStep.Refused
+        assertTrue(pure is OfferOutcome.Refused)
+        val refused = pure as OfferOutcome.Refused
         val viaHelper = refuseCrossCutting(
             machine = "FileProtocol",
             state = FileState.Closed.label(),

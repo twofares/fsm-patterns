@@ -8,8 +8,9 @@ package fsm.sample.effect
  * the teaching-standard combination so agents do not invent incomplete packages
  * (e.g. audit-only refuse without metric/trace).
  *
- * TrafficLight and DoorSystem (regions + guards) already call these helpers.
- * Migrate remaining hand-rolled sites (File, Connection, hierarchy) in later PRs.
+ * Sample machines (TrafficLight, Door, FileProtocol, Connection) use these helpers.
+ * Fixture tests prove helpers match goldens (including extras and Connection
+ * `traceDetail = event.label()`).
  *
  * [extras] carries **machine-specific** metrics/traces — required for non-toy machines
  * (e.g. `csp.accept`, `light.ticks`, `door.latch.unlock`). Never drop extras when

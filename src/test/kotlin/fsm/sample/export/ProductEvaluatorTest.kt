@@ -3,8 +3,8 @@ package fsm.sample.export
 import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
-import fsm.sample.csp.OfferStep
 import fsm.sample.csp.exportLabels
+import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
@@ -13,13 +13,12 @@ import fsm.sample.flat.step
 import fsm.sample.flat.transition
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
-import fsm.sample.gof.ConnectionStepEffects
 import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Transferring
 import fsm.sample.gof.declaredEffects
-import fsm.sample.gof.planTransition
+import fsm.sample.gof.exportLabels
 import fsm.sample.effect.CrossCuttingEnv
 import fsm.sample.logging.RecordKind
 import fsm.sample.orthogonal.LatchEvent
@@ -106,7 +105,7 @@ class ProductEvaluatorTest {
                 assertEquals(pure.next.label(), row.to)
                 assertEquals(pure.exportLabels(), row.effects)
                 when (pure) {
-                    is OfferStep.Accepted -> {
+                    is OfferOutcome.Accepted -> {
                         assertEquals(TransitionKind.ACCEPTED, row.kind)
                         assertTrue(row.effects.any { it.contains("LogTransition") })
                         assertTrue(row.effects.any { it.contains("csp.accept") || it.contains("Metric") })
@@ -117,7 +116,7 @@ class ProductEvaluatorTest {
                             "accepted row should declare domain I/O: $row",
                         )
                     }
-                    is OfferStep.Refused -> {
+                    is OfferOutcome.Refused -> {
                         assertEquals(TransitionKind.REFUSED, row.kind)
                         assertTrue(row.effects.any { it.contains("LogRefusal") })
                         assertTrue(row.effects.any { it.contains("csp.refuse") || it.contains("Trace") })

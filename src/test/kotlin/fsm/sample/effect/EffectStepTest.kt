@@ -6,7 +6,6 @@ import fsm.sample.csp.FileOp
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.OfferResult
-import fsm.sample.csp.OfferStep
 import fsm.sample.csp.applyDomainFile
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightEffect
@@ -24,6 +23,8 @@ import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Online
 import fsm.sample.gof.SessionOp
+import fsm.sample.gof.exportLabels
+import fsm.sample.gof.planTransition
 import fsm.sample.logging.RecordKind
 import fsm.sample.orthogonal.DoorActuator
 import fsm.sample.orthogonal.DoorEvent
@@ -87,7 +88,7 @@ class EffectStepTest {
     fun `File refuse is cross-cutting multi-family without domain IO`() {
         val p = FileProtocol()
         val refused = p.stepOffer(FileState.Closed, FileEvent.Read)
-        assertTrue(refused is OfferStep.Refused)
+        assertTrue(refused is OfferOutcome.Refused)
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Audit.LogRefusal })
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "csp.refuse" })
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Trace.Span })
@@ -102,9 +103,9 @@ class EffectStepTest {
     fun `File accept declares csp accept metric and domain OpenHandle`() {
         val p = FileProtocol()
         val accepted = p.stepOffer(FileState.Closed, FileEvent.Open)
-        assertTrue(accepted is OfferStep.Accepted)
+        assertTrue(accepted is OfferOutcome.Accepted)
         assertTrue(accepted.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "csp.accept" })
-        assertEquals(listOf(FileEffect.OpenHandle), (accepted as OfferStep.Accepted).domain)
+        assertEquals(listOf(FileEffect.OpenHandle), (accepted as OfferOutcome.Accepted).domain)
     }
 
     @Test
@@ -145,11 +146,40 @@ class EffectStepTest {
 
     @Test
     fun `planTransition Offline to Idle includes OpenSession and session metrics`() {
-        val planned = fsm.sample.gof.planTransition(Offline, Idle, ConnEvent.Connect)
+        val planned = planTransition(Offline, Idle, ConnEvent.Connect)
         assertTrue(planned.domain.contains(ConnectionEffect.OpenSession))
         assertTrue(planned.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "connection.session.open" })
         assertTrue(planned.exportLabels().contains("OpenSession"))
         assertTrue(planned.exportLabels().any { it.startsWith("Audit.LogEntry") })
+    }
+
+    /**
+     * PR 6 gate: Offline→Idle keeps Online enter paired with OpenSession in export labels.
+     * Within the Online enter fragment, LogEntry(Online) precedes OpenSession; only
+     * Online-session metric/trace may intervene (not Idle entry or flattened reordering).
+     */
+    @Test
+    fun `Connect Offline to Idle exportLabels keeps LogEntry Online immediately before OpenSession`() {
+        val planned = planTransition(Offline, Idle, ConnEvent.Connect)
+        val labels = planned.exportLabels()
+        val onlineEntry = labels.indexOfFirst { it == "Audit.LogEntry(Online)" }
+        val openSession = labels.indexOfFirst { it == "OpenSession" }
+        val idleEntry = labels.indexOfFirst { it == "Audit.LogEntry(Idle)" }
+        assertTrue(onlineEntry >= 0, "missing Audit.LogEntry(Online) in $labels")
+        assertTrue(openSession >= 0, "missing OpenSession in $labels")
+        assertTrue(openSession > onlineEntry, "OpenSession must follow LogEntry(Online); labels=$labels")
+        // No other state entry/exit between Online enter and its domain OpenSession.
+        val between = labels.subList(onlineEntry + 1, openSession)
+        assertTrue(
+            between.none { it.startsWith("Audit.LogEntry") || it.startsWith("Audit.LogExit") },
+            "foreign audit between LogEntry(Online) and OpenSession: $between in $labels",
+        )
+        // Idle enter must come after OpenSession (fragment pairing, not flatten-all-CC).
+        assertTrue(idleEntry > openSession, "LogEntry(Idle) must follow OpenSession; labels=$labels")
+        // Same fragment: OpenSession is first domain after Online's CC block.
+        val onlineFrag = planned.fragments.single { ConnectionEffect.OpenSession in it.domain }
+        assertTrue(onlineFrag.crossCutting.any { it.exportLabel() == "Audit.LogEntry(Online)" })
+        assertEquals(listOf(ConnectionEffect.OpenSession), onlineFrag.domain)
     }
 
     @Test
@@ -160,7 +190,7 @@ class EffectStepTest {
         applyDomainLight(light.domain, LightPort())
         val file = FileProtocol().stepOffer(FileState.Closed, FileEvent.Open)
         CrossCuttingInterpreter.apply(file.crossCutting, shared)
-        applyDomainFile((file as OfferStep.Accepted).domain, fsm.sample.csp.FilePort())
+        applyDomainFile((file as OfferOutcome.Accepted).domain, fsm.sample.csp.FilePort())
         assertEquals(2, shared.metrics.get("fsm.transitions"))
         assertEquals(1, shared.metrics.get("light.ticks"))
         assertEquals(1, shared.metrics.get("csp.accept"))
