@@ -1,7 +1,8 @@
 package fsm.sample.gof
 
-import fsm.sample.logging.RecordKind
 import fsm.sample.effect.CrossCuttingEnv
+import fsm.sample.logging.RecordKind
+import fsm.sample.machine.applyFragments
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -27,6 +28,82 @@ class ConnectionMachineTest {
         assertTrue(entries.any { it.to == "Offline" })
         assertTrue(entries.any { it.to == "Online" })
         assertTrue(entries.any { it.to == "Idle" })
+    }
+
+    /**
+     * PR 6 required gate: Connect Offline→Idle keeps `Audit.LogEntry(Online)` paired with
+     * `OpenSession` in **both** pure [exportLabels] order and boundary apply order.
+     * Online-session metric/trace may sit between them inside the same fragment; Idle entry
+     * must not. Fails if hierarchy is routed through applyAccepted or fragments are flattened.
+     */
+    @Test
+    fun `Connect Offline to Idle keeps LogEntry Online immediately before OpenSession in labels and apply`() {
+        // --- Pure export labels / fragment pairing ---
+        val result = dispatchWithDelegation(Offline, ConnEvent.Connect, Offline)
+        assertTrue(result is HandleResult.Handled)
+        val effects = declaredEffects(Offline, ConnEvent.Connect, result)
+        val labels = effects.exportLabels()
+        val labelOnline = labels.indexOfFirst { it == "Audit.LogEntry(Online)" }
+        val labelOpen = labels.indexOfFirst { it == "OpenSession" }
+        val labelIdle = labels.indexOfFirst { it == "Audit.LogEntry(Idle)" }
+        assertTrue(labelOnline >= 0, "missing Audit.LogEntry(Online) in $labels")
+        assertTrue(labelOpen >= 0, "missing OpenSession in $labels")
+        assertTrue(labelOpen > labelOnline, "OpenSession must follow LogEntry(Online); labels=$labels")
+        val between = labels.subList(labelOnline + 1, labelOpen)
+        assertTrue(
+            between.none { it.startsWith("Audit.LogEntry") || it.startsWith("Audit.LogExit") },
+            "foreign audit between LogEntry(Online) and OpenSession: $between in $labels",
+        )
+        assertTrue(labelIdle > labelOpen, "LogEntry(Idle) must follow OpenSession; labels=$labels")
+        val onlineFrag = effects.fragments.single { ConnectionEffect.OpenSession in it.domain }
+        assertTrue(onlineFrag.crossCutting.any { it.exportLabel() == "Audit.LogEntry(Online)" })
+        assertEquals(listOf(ConnectionEffect.OpenSession), onlineFrag.domain)
+
+        // --- Boundary apply order: Online entry audit before OpenSession domain ---
+        val env = CrossCuttingEnv()
+        val port = ConnectionPort()
+        val applyOrder = mutableListOf<String>()
+        applyFragments(
+            effects = effects,
+            env = env,
+            port = port,
+            applyDomain = { domain, p ->
+                val onlineEntered = env.log.snapshot().any {
+                    it.kind == RecordKind.ENTRY && it.to == "Online"
+                }
+                val idleEntered = env.log.snapshot().any {
+                    it.kind == RecordKind.ENTRY && it.to == "Idle"
+                }
+                for (d in domain) {
+                    when (d) {
+                        ConnectionEffect.OpenSession -> {
+                            applyOrder += when {
+                                !onlineEntered -> "OpenSession-before-online-cc"
+                                idleEntered -> "OpenSession-after-idle-entry"
+                                else -> "cc-online-then-OpenSession"
+                            }
+                            p.record(SessionOp.Opened)
+                        }
+                        else -> applyDomainConnection(listOf(d), p)
+                    }
+                }
+            },
+        )
+        assertEquals(
+            listOf("cc-online-then-OpenSession"),
+            applyOrder,
+            "applyFragments must run Online enter CC before OpenSession and before Idle entry",
+        )
+        assertEquals(listOf(SessionOp.Opened), port.sessions)
+
+        // Live handle path must match the same pairing (applyFragments, not applyAccepted).
+        val live = ConnectionContext()
+        live.handle(ConnEvent.Connect)
+        assertEquals(listOf(SessionOp.Opened), live.port.sessions)
+        val liveLog = live.crossCutting.log.snapshot()
+        val liveOnline = liveLog.indexOfFirst { it.kind == RecordKind.ENTRY && it.to == "Online" }
+        assertTrue(liveOnline >= 0)
+        assertEquals(Idle, live.current)
     }
 
     @Test

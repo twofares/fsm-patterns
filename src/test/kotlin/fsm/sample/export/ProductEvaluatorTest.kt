@@ -13,13 +13,12 @@ import fsm.sample.flat.step
 import fsm.sample.flat.transition
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
-import fsm.sample.gof.ConnectionStepEffects
 import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Transferring
 import fsm.sample.gof.declaredEffects
-import fsm.sample.gof.planTransition
+import fsm.sample.gof.exportLabels
 import fsm.sample.effect.CrossCuttingEnv
 import fsm.sample.logging.RecordKind
 import fsm.sample.orthogonal.LatchEvent

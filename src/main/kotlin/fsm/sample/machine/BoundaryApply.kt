@@ -24,33 +24,10 @@ import fsm.sample.effect.StepResult
  * before exit effects run and would flatten per-fragment CC↔domain pairing.
  * Connection-style boundaries call [applyFragments], then assign when
  * Handled && next !== from.
- */
-
-/**
- * PURPOSE: One ordered hierarchical effect unit (exit, enter, or transition fragment).
  *
- * Within a fragment, cross-cutting applies before domain so LCA pairing is preserved
- * (e.g. LogEntry(Online) immediately before OpenSession).
- *
- * Generic over domain [D]. Same shape as Connection-local
- * [fsm.sample.gof.EffectFragment] (fixed `D = ConnectionEffect`); PR 6 migrates
- * Connection onto this type so agents need not juggle two fragment names.
+ * Fragment types live in [FragmentedEffects.kt]; hierarchy path/LCA helpers in
+ * [Hierarchy.kt].
  */
-data class EffectFragment<D>(
-    val crossCutting: List<CrossCuttingEffect> = emptyList(),
-    val domain: List<D> = emptyList(),
-)
-
-/**
- * PURPOSE: Ordered hierarchical effect assembly as a list of [EffectFragment]s.
- *
- * Apply via [applyFragments] — never flatten all CC then all domain, and never
- * route through [applyAccepted]. Same role as [fsm.sample.gof.ConnectionStepEffects]
- * until hierarchy migration (PR 6).
- */
-data class FragmentedStepEffects<D>(
-    val fragments: List<EffectFragment<D>> = emptyList(),
-)
 
 /**
  * PURPOSE: Total / accepted step boundary — assign next, then CC, then domain.

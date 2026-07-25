@@ -20,6 +20,7 @@ import fsm.sample.gof.Online
 import fsm.sample.gof.Transferring
 import fsm.sample.gof.declaredEffects
 import fsm.sample.gof.dispatchWithDelegation
+import fsm.sample.gof.exportLabels
 import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
