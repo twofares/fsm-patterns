@@ -8,8 +8,8 @@ package fsm.sample.effect
  * These helpers encode that teaching-standard combination so agents do not invent
  * incomplete packages (e.g. audit-only refuse without metric/trace).
  *
- * **Additive only** in this PR — production call sites still build lists by hand;
- * fixture tests prove helpers reproduce those lists (including extras and
+ * FileProtocol builds accept/refuse via these helpers; other machines still hand-roll
+ * until migrated. Fixture tests prove helpers match pure lists (including extras and
  * Connection `traceDetail = event.label()`).
  *
  * [extras] carries **machine-specific** metrics/traces — required for non-toy machines

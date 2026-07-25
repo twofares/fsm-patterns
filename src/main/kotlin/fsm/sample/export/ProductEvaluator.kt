@@ -3,8 +3,8 @@ package fsm.sample.export
 import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
-import fsm.sample.csp.OfferStep
 import fsm.sample.csp.exportLabels
+import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.StepResult
 import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
@@ -103,14 +103,14 @@ fun evaluateFileProtocol(): TransitionTable {
     for (s in states) {
         for (e in alphabet) {
             when (val result = protocol.stepOffer(s, e)) {
-                is OfferStep.Accepted -> rows += TransitionRow(
+                is OfferOutcome.Accepted -> rows += TransitionRow(
                     from = s.label(),
                     event = e.label(),
                     to = result.next.label(),
                     kind = TransitionKind.ACCEPTED,
                     effects = result.exportLabels(),
                 )
-                is OfferStep.Refused -> rows += TransitionRow(
+                is OfferOutcome.Refused -> rows += TransitionRow(
                     from = s.label(),
                     event = e.label(),
                     to = result.next.label(),

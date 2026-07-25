@@ -6,7 +6,6 @@ import fsm.sample.csp.FileOp
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.OfferResult
-import fsm.sample.csp.OfferStep
 import fsm.sample.csp.applyDomainFile
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightEffect
@@ -87,7 +86,7 @@ class EffectStepTest {
     fun `File refuse is cross-cutting multi-family without domain IO`() {
         val p = FileProtocol()
         val refused = p.stepOffer(FileState.Closed, FileEvent.Read)
-        assertTrue(refused is OfferStep.Refused)
+        assertTrue(refused is OfferOutcome.Refused)
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Audit.LogRefusal })
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "csp.refuse" })
         assertTrue(refused.crossCutting.any { it is CrossCuttingEffect.Trace.Span })
@@ -102,9 +101,9 @@ class EffectStepTest {
     fun `File accept declares csp accept metric and domain OpenHandle`() {
         val p = FileProtocol()
         val accepted = p.stepOffer(FileState.Closed, FileEvent.Open)
-        assertTrue(accepted is OfferStep.Accepted)
+        assertTrue(accepted is OfferOutcome.Accepted)
         assertTrue(accepted.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "csp.accept" })
-        assertEquals(listOf(FileEffect.OpenHandle), (accepted as OfferStep.Accepted).domain)
+        assertEquals(listOf(FileEffect.OpenHandle), (accepted as OfferOutcome.Accepted).domain)
     }
 
     @Test
@@ -160,7 +159,7 @@ class EffectStepTest {
         applyDomainLight(light.domain, LightPort())
         val file = FileProtocol().stepOffer(FileState.Closed, FileEvent.Open)
         CrossCuttingInterpreter.apply(file.crossCutting, shared)
-        applyDomainFile((file as OfferStep.Accepted).domain, fsm.sample.csp.FilePort())
+        applyDomainFile((file as OfferOutcome.Accepted).domain, fsm.sample.csp.FilePort())
         assertEquals(2, shared.metrics.get("fsm.transitions"))
         assertEquals(1, shared.metrics.get("light.ticks"))
         assertEquals(1, shared.metrics.get("csp.accept"))

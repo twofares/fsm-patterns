@@ -3,11 +3,12 @@ package fsm.sample.csp
 /**
  * PURPOSE: FileProtocol **domain** effect ADT — I/O intents only (no audit wrappers).
  *
- * Cross-cutting accept/refuse (audit / metrics / trace) is `List<CrossCuttingEffect>` on [OfferStep].
- * Domain-specific (only when accepted — refuse is audit-only):
+ * Cross-cutting accept/refuse (audit / metrics / trace) is `List<CrossCuttingEffect>` on
+ * [fsm.sample.effect.OfferOutcome]. Domain-specific (only when accepted):
  * - [OpenHandle] / [ReadChunk] / [CloseHandle] → [FilePort] ops
  *
- * Teaching: refusal never emits domain I/O intents.
+ * Teaching: refusal never emits domain I/O intents (multi-family cross-cutting only —
+ * audit + refuse metric + trace, not audit-only).
  *
  * Domain policy (engagement-driven): domain ops fire on every accepted menu
  * engagement, including self-loop Read (state stays Opened).

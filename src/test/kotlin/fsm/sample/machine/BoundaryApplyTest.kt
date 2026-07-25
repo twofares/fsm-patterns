@@ -1,6 +1,7 @@
 package fsm.sample.machine
 
 import fsm.sample.effect.CrossCuttingEnv
+import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.StepResult
 import fsm.sample.effect.auditEntry
 import fsm.sample.effect.auditExit
@@ -106,7 +107,7 @@ class BoundaryApplyTest {
         var current: LightState = LightState.Red
         val order = mutableListOf<String>()
 
-        val accepted = OfferBoundaryResult.Accepted(
+        val accepted = OfferOutcome.Accepted(
             next = LightState.Green,
             crossCutting = listOf(
                 auditTransition("Light", "Red", "Open", "Green"),
@@ -142,13 +143,13 @@ class BoundaryApplyTest {
         var current: LightState = LightState.Red
         var domainCalls = 0
 
-        val refused = OfferBoundaryResult.Refused(
+        val refused = OfferOutcome.Refused<LightState, LightEffect>(
+            reason = "not-open",
             next = LightState.Red,
             crossCutting = listOf(
                 auditRefusal("Light", "Red", "Read", "not-open"),
                 metricInc("csp.refuse"),
             ),
-            reason = "not-open",
         )
 
         applyOffer(

@@ -3,8 +3,8 @@ package fsm.sample.export
 import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
-import fsm.sample.csp.OfferStep
 import fsm.sample.csp.exportLabels
+import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
@@ -106,7 +106,7 @@ class ProductEvaluatorTest {
                 assertEquals(pure.next.label(), row.to)
                 assertEquals(pure.exportLabels(), row.effects)
                 when (pure) {
-                    is OfferStep.Accepted -> {
+                    is OfferOutcome.Accepted -> {
                         assertEquals(TransitionKind.ACCEPTED, row.kind)
                         assertTrue(row.effects.any { it.contains("LogTransition") })
                         assertTrue(row.effects.any { it.contains("csp.accept") || it.contains("Metric") })
@@ -117,7 +117,7 @@ class ProductEvaluatorTest {
                             "accepted row should declare domain I/O: $row",
                         )
                     }
-                    is OfferStep.Refused -> {
+                    is OfferOutcome.Refused -> {
                         assertEquals(TransitionKind.REFUSED, row.kind)
                         assertTrue(row.effects.any { it.contains("LogRefusal") })
                         assertTrue(row.effects.any { it.contains("csp.refuse") || it.contains("Trace") })

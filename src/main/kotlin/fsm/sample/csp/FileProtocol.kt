@@ -1,12 +1,12 @@
 package fsm.sample.csp
 
-import fsm.sample.effect.CrossCuttingEffect
 import fsm.sample.effect.CrossCuttingEnv
-import fsm.sample.effect.CrossCuttingInterpreter
-import fsm.sample.effect.auditRefusal
-import fsm.sample.effect.auditTransition
+import fsm.sample.effect.OfferOutcome
+import fsm.sample.effect.acceptTransitionCrossCutting
+import fsm.sample.effect.exportLabels
 import fsm.sample.effect.metricInc
-import fsm.sample.effect.traceSpan
+import fsm.sample.effect.refuseCrossCutting
+import fsm.sample.machine.applyOffer
 
 /**
  * PURPOSE: CSP process with multi-family **cross-cutting** + domain I/O intents.
@@ -36,37 +36,23 @@ sealed class FileEvent {
     fun label(): String = this::class.simpleName ?: toString()
 }
 
+/** PURPOSE: CSP-local client DTO from [FileProtocol.offer] (not the pure outcome). */
 sealed class OfferResult {
     data class Accepted(val next: FileState) : OfferResult()
     data class Refused(val reason: String) : OfferResult()
 }
 
 /**
- * PURPOSE: Pure offer outcome — [Accepted] has domain I/O; [Refused] is cross-cutting only.
+ * PURPOSE: Signature-only alias for pure CSP offer outcomes.
+ *
+ * Nested classifiers are [OfferOutcome.Accepted] / [OfferOutcome.Refused] — do **not**
+ * construct via `OfferStep.Accepted` (typealias does not create nested types).
  */
-sealed class OfferStep {
-    abstract val next: FileState
-    abstract val crossCutting: List<CrossCuttingEffect>
+typealias OfferStep = OfferOutcome<FileState, FileEffect>
 
-    data class Accepted(
-        override val next: FileState,
-        override val crossCutting: List<CrossCuttingEffect>,
-        val domain: List<FileEffect>,
-    ) : OfferStep()
-
-    data class Refused(
-        val reason: String,
-        override val next: FileState,
-        override val crossCutting: List<CrossCuttingEffect>,
-    ) : OfferStep()
-}
-
-fun OfferStep.exportLabels(): List<String> = when (this) {
-    is OfferStep.Accepted ->
-        crossCutting.map { it.exportLabel() } + domain.map { it.exportLabel() }
-    is OfferStep.Refused ->
-        crossCutting.map { it.exportLabel() }
-}
+/** PURPOSE: Parameterless export labels for FileProtocol pure offers. */
+fun OfferOutcome<FileState, FileEffect>.exportLabels(): List<String> =
+    exportLabels(FileEffect::exportLabel)
 
 class FileProtocol(
     initial: FileState = FileState.Closed,
@@ -105,20 +91,32 @@ class FileProtocol(
     fun stepOffer(state: FileState, event: FileEvent): OfferStep {
         if (event !in alphabet) {
             val reason = "event outside process alphabet"
-            return OfferStep.Refused(
+            return OfferOutcome.Refused(
                 reason = reason,
                 next = state,
-                crossCutting = refuseCrossCutting(state, event, reason),
+                crossCutting = refuseCrossCutting(
+                    machine = machineName,
+                    state = state.label(),
+                    event = event.label(),
+                    reason = reason,
+                    metricName = "csp.refuse",
+                ),
             )
         }
         val offered = menu(state)
         if (event !in offered) {
             val reason =
                 "event not in current menu ${offered.map { it.label() }}; refused"
-            return OfferStep.Refused(
+            return OfferOutcome.Refused(
                 reason = reason,
                 next = state,
-                crossCutting = refuseCrossCutting(state, event, reason),
+                crossCutting = refuseCrossCutting(
+                    machine = machineName,
+                    state = state.label(),
+                    event = event.label(),
+                    reason = reason,
+                    metricName = "csp.refuse",
+                ),
             )
         }
         val next = pureWhenAccepted(state, event)
@@ -127,45 +125,25 @@ class FileProtocol(
             FileEvent.Read -> FileEffect.ReadChunk
             FileEvent.Close -> FileEffect.CloseHandle
         }
-        return OfferStep.Accepted(
+        return OfferOutcome.Accepted(
             next = next,
-            crossCutting = listOf(
-                auditTransition(
-                    machine = machineName,
-                    from = state.label(),
-                    event = event.label(),
-                    to = next.label(),
-                ),
-                metricInc("fsm.transitions"),
-                metricInc("csp.accept"),
+            crossCutting = acceptTransitionCrossCutting(
+                machine = machineName,
+                from = state.label(),
+                event = event.label(),
+                to = next.label(),
+                extras = listOf(metricInc("csp.accept")),
             ),
             domain = listOf(domain),
         )
     }
 
-    private fun refuseCrossCutting(
-        state: FileState,
-        event: FileEvent,
-        reason: String,
-    ): List<CrossCuttingEffect> = listOf(
-        auditRefusal(machineName, state.label(), event.label(), reason),
-        metricInc("csp.refuse"),
-        traceSpan("csp.refuse", reason),
-    )
-
     fun offer(event: FileEvent): OfferResult {
-        return when (val result = stepOffer(current, event)) {
-            is OfferStep.Accepted -> {
-                current = result.next
-                CrossCuttingInterpreter.apply(result.crossCutting, crossCutting)
-                applyDomainFile(result.domain, port)
-                OfferResult.Accepted(result.next)
-            }
-            is OfferStep.Refused -> {
-                current = result.next
-                CrossCuttingInterpreter.apply(result.crossCutting, crossCutting)
-                OfferResult.Refused(result.reason)
-            }
+        val result = stepOffer(current, event)
+        applyOffer(result, crossCutting, port, ::applyDomainFile) { current = it }
+        return when (result) {
+            is OfferOutcome.Accepted -> OfferResult.Accepted(result.next)
+            is OfferOutcome.Refused -> OfferResult.Refused(result.reason)
         }
     }
 }
