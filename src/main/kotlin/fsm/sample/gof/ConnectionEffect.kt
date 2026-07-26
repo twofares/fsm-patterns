@@ -1,11 +1,13 @@
 package fsm.sample.gof
 
+import fsm.sample.machine.RecordingPort
+
 /**
  * PURPOSE: Connection **domain** effect ADT — session/heartbeat intents only.
  *
  * Cross-cutting is a plain `List<CrossCuttingEffect>` assembled into
- * [fsm.sample.machine.FragmentedStepEffects] by [planTransition] / [declaredEffects],
- * not nested here.
+ * [fsm.sample.machine.FragmentedStepEffects] by shared [fsm.sample.machine.planTransition]
+ * / vignette [declaredEffects], not nested here.
  *
  * Domain-specific (this machine only):
  * - [IncHeartbeat] — Online superstate reaction
@@ -35,25 +37,23 @@ sealed class SessionOp {
 /**
  * PURPOSE: In-memory domain port for connection session + heartbeat.
  * Single sink for all Connection domain effects (no separate heartbeat callback).
+ *
+ * **Is** the session [RecordingPort] bag; heartbeat counter stays specialized here.
+ * No private bag + pass-through shell.
  */
-class ConnectionPort {
-    private val _sessions = mutableListOf<SessionOp>()
-    val sessions: List<SessionOp> get() = _sessions.toList()
+class ConnectionPort : RecordingPort<SessionOp>() {
+    val sessions: List<SessionOp> get() = items
 
     /** Heartbeat counter applied only via [incHeartbeat] at the domain boundary. */
     var heartbeats: Int = 0
         private set
 
-    fun record(op: SessionOp) {
-        _sessions += op
-    }
-
     fun incHeartbeat() {
         heartbeats += 1
     }
 
-    fun clear() {
-        _sessions.clear()
+    override fun clear() {
+        super.clear()
         heartbeats = 0
     }
 

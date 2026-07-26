@@ -42,14 +42,6 @@ sealed class OfferResult {
     data class Refused(val reason: String) : OfferResult()
 }
 
-/**
- * PURPOSE: Signature-only alias for pure CSP offer outcomes.
- *
- * Nested classifiers are [OfferOutcome.Accepted] / [OfferOutcome.Refused] — do **not**
- * construct via `OfferStep.Accepted` (typealias does not create nested types).
- */
-typealias OfferStep = OfferOutcome<FileState, FileEffect>
-
 /** PURPOSE: Parameterless export labels for FileProtocol pure offers. */
 fun OfferOutcome<FileState, FileEffect>.exportLabels(): List<String> =
     exportLabels(FileEffect::exportLabel)
@@ -88,7 +80,7 @@ class FileProtocol(
         }
     }
 
-    fun stepOffer(state: FileState, event: FileEvent): OfferStep {
+    fun stepOffer(state: FileState, event: FileEvent): OfferOutcome<FileState, FileEffect> {
         if (event !in alphabet) {
             val reason = "event outside process alphabet"
             return OfferOutcome.Refused(

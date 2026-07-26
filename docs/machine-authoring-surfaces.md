@@ -8,6 +8,20 @@
 | **Workspace** | `/Users/bstiles/Scratch/fsm` |
 | **Audience** | Senior engineers and coding agents extending this sample |
 
+## Current-state errata (shipped code)
+
+This document began as a **planning / PR design** writeup. Prefer the project **README** as the agent authoring surface. Where historical sections below still show intermediate options, **shipped code** wins:
+
+| Topic | Shipped (do this) | Historical text may still say |
+|-------|-------------------|-------------------------------|
+| CSP pure outcome | `OfferOutcome.Accepted` / `Refused` only — **no** `typealias OfferStep` | Optional signature-only `OfferStep` alias (R1) |
+| Hierarchy API | Call `fsm.sample.machine.pathFromRoot` / `planTransition` / `dispatchWithDelegation` **directly** | Thin gof free-function wrappers that bind ConnState lambdas |
+| Conn dispatch binding | Vignette-local `internal dispatchConnection` binds Conn lambdas once (handle / probe / tests) | Triplicated `dispatchWithDelegation(...)` lambda sets at each call site |
+| Hierarchy export step | `productEvaluateHierarchy` takes `(S,E) -> HierarchyStep<S,D>` (sealed Handled/Unhandled + effects) | Separate `probe` + `isUnhandled` + `nextOf` + `declaredEffects` callbacks |
+| `planTransition` | Optional `transitionExtras: List<CrossCuttingEffect> = emptyList()` on the leaf-change transition fragment | Signature without `transitionExtras` |
+| Domain list ports | Vignette ports **subclass** `machine.RecordingPort<T>` (are the bag); specialized fields on same class | Private bag + pass-through `record`/`clear`/`items` shells |
+| Container refuse | `applyRefusal(crossCutting, env)` | Raw `CrossCuttingInterpreter.apply` only |
+
 ---
 
 ## Overview
@@ -29,7 +43,7 @@ This design proposes **in-repo, stdlib-only extractable surfaces**—interfaces,
 | Flat | `flat/TrafficLight.kt`, `flat/LightEffect.kt` | top-level `transition`, `step` → `StepResult<S,D>` | `TrafficLight.handle` |
 | Hierarchical | `gof/ConnectionMachine.kt`, `gof/ConnectionEffect.kt` | `dispatchWithDelegation`, `planTransition`, `declaredEffects` | `ConnectionContext.handle` + fragment apply |
 | Orthogonal | `orthogonal/DoorSystem.kt`, `orthogonal/DoorEffects.kt` | region `step` + pure `guardRefusalEffects` | region `handle` + container `handle` |
-| CSP | `csp/FileProtocol.kt`, `csp/FileEffect.kt` | `stepOffer` → `OfferStep` | `FileProtocol.offer` |
+| CSP | `csp/FileProtocol.kt`, `csp/FileEffect.kt` | `stepOffer` → `OfferOutcome` | `FileProtocol.offer` |
 | Shared effects | `effect/StepResult.kt`, `CrossCuttingEffect.kt`, `CrossCuttingEnv.kt`, `CrossCuttingInterpreter.kt` | declare lists | `CrossCuttingInterpreter.apply` |
 | Export | `export/ProductEvaluator.kt`, `TransitionModel.kt` | product over sealed domains | **never** interpreters |
 

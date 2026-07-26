@@ -1,5 +1,7 @@
 package fsm.sample.csp
 
+import fsm.sample.machine.RecordingPort
+
 /**
  * PURPOSE: FileProtocol **domain** effect ADT — I/O intents only (no audit wrappers).
  *
@@ -32,18 +34,12 @@ sealed class FileOp {
     fun label(): String = this::class.simpleName ?: toString()
 }
 
-/** PURPOSE: In-memory domain port for file protocol I/O intents. */
-class FilePort {
-    private val _ops = mutableListOf<FileOp>()
-    val ops: List<FileOp> get() = _ops.toList()
-
-    fun record(op: FileOp) {
-        _ops += op
-    }
-
-    fun clear() {
-        _ops.clear()
-    }
+/**
+ * PURPOSE: In-memory domain port for file protocol I/O intents.
+ * **Is** the [RecordingPort] bag — no private bag + pass-through shell.
+ */
+class FilePort : RecordingPort<FileOp>() {
+    val ops: List<FileOp> get() = items
 
     fun snapshot(): String = "fileOps=${ops.map { it.label() }}"
 }

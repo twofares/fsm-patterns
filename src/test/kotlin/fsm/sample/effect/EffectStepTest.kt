@@ -16,6 +16,7 @@ import fsm.sample.flat.applyDomainLight
 import fsm.sample.flat.step
 import fsm.sample.flat.transition
 import fsm.sample.gof.ConnEvent
+import fsm.sample.gof.ConnState
 import fsm.sample.gof.ConnectionContext
 import fsm.sample.gof.ConnectionEffect
 import fsm.sample.gof.HandleResult
@@ -24,8 +25,9 @@ import fsm.sample.gof.Offline
 import fsm.sample.gof.Online
 import fsm.sample.gof.SessionOp
 import fsm.sample.gof.exportLabels
-import fsm.sample.gof.planTransition
 import fsm.sample.logging.RecordKind
+import fsm.sample.machine.FragmentedStepEffects
+import fsm.sample.machine.planTransition
 import fsm.sample.orthogonal.DoorActuator
 import fsm.sample.orthogonal.DoorEvent
 import fsm.sample.orthogonal.DoorSystem
@@ -40,6 +42,27 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+
+/** Test helper: shared [planTransition] with Connection ConnState lambdas. */
+private fun planConnectionTransition(
+    from: ConnState,
+    to: ConnState,
+    event: ConnEvent,
+    handlerDomain: List<ConnectionEffect> = emptyList(),
+    machineName: String = "Connection",
+    transitionExtras: List<CrossCuttingEffect> = emptyList(),
+): FragmentedStepEffects<ConnectionEffect> = planTransition(
+    from = from,
+    to = to,
+    eventLabel = event.label(),
+    handlerDomain = handlerDomain,
+    machineName = machineName,
+    nameOf = { it.name },
+    parentOf = { it.parent },
+    enterEffects = { s, m -> s.enterEffects(m) },
+    exitEffects = { s, m -> s.exitEffects(m) },
+    transitionExtras = transitionExtras,
+)
 
 /**
  * PURPOSE: Prove multi-family cross-cutting + domain ports via shipped APIs.
@@ -127,9 +150,12 @@ class EffectStepTest {
         val ctx = ConnectionContext()
         ctx.handle(ConnEvent.Connect)
         assertEquals(0, ctx.port.heartbeats)
-        val handled = Online.onEvent(ConnEvent.Heartbeat, Idle)
-        val h = handled as HandleResult.Handled
-        assertEquals(listOf(ConnectionEffect.IncHeartbeat), h.domain)
+        when (val handled = Online.onEvent(ConnEvent.Heartbeat, Idle)) {
+            is HandleResult.Handled ->
+                assertEquals(listOf(ConnectionEffect.IncHeartbeat), handled.domain)
+            is HandleResult.Unhandled ->
+                error("expected Heartbeat to be handled by Online")
+        }
         assertEquals(0, ctx.port.heartbeats)
         assertTrue(ctx.handle(ConnEvent.Heartbeat))
         assertEquals(1, ctx.port.heartbeats)
@@ -149,11 +175,48 @@ class EffectStepTest {
 
     @Test
     fun `planTransition Offline to Idle includes OpenSession and session metrics`() {
-        val planned = planTransition(Offline, Idle, ConnEvent.Connect)
+        val planned = planConnectionTransition(Offline, Idle, ConnEvent.Connect)
         assertTrue(planned.domain.contains(ConnectionEffect.OpenSession))
         assertTrue(planned.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "connection.session.open" })
         assertTrue(planned.exportLabels().contains("OpenSession"))
         assertTrue(planned.exportLabels().any { it.startsWith("Audit.LogEntry") })
+    }
+
+    /**
+     * Regression gate for [planTransition] `transitionExtras`: non-empty extras must land
+     * on the leaf-change transition fragment (accept preamble), not only enter/exit side channels.
+     */
+    @Test
+    fun `planTransition transitionExtras appear on the transition fragment`() {
+        val demoMetric = metricInc("connection.demo")
+        val planned = planConnectionTransition(
+            from = Offline,
+            to = Idle,
+            event = ConnEvent.Connect,
+            transitionExtras = listOf(demoMetric),
+        )
+        // Flat export labels include the extra.
+        assertTrue(
+            planned.exportLabels().any { it == "Metric.Inc(connection.demo)" },
+            "transitionExtras must show in exportLabels: ${planned.exportLabels()}",
+        )
+        assertTrue(
+            planned.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "connection.demo" },
+        )
+        // Transition fragment is the one with the accept-transition audit (not enter/exit only).
+        val transitionFrag = planned.fragments.single { frag ->
+            frag.crossCutting.any { it is CrossCuttingEffect.Audit.LogTransition }
+        }
+        assertTrue(
+            transitionFrag.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "connection.demo" },
+            "demo metric must sit on the transition fragment with LogTransition",
+        )
+        // Not smuggled only into Online enter (session metrics live there separately).
+        val onlineEnter = planned.fragments.single { ConnectionEffect.OpenSession in it.domain }
+        assertTrue(
+            onlineEnter.crossCutting.none { it is CrossCuttingEffect.Metric.Inc && it.name == "connection.demo" },
+            "transitionExtras must not only appear on enter fragments",
+        )
     }
 
     /**
@@ -163,7 +226,7 @@ class EffectStepTest {
      */
     @Test
     fun `Connect Offline to Idle exportLabels keeps LogEntry Online immediately before OpenSession`() {
-        val planned = planTransition(Offline, Idle, ConnEvent.Connect)
+        val planned = planConnectionTransition(Offline, Idle, ConnEvent.Connect)
         val labels = planned.exportLabels()
         val onlineEntry = labels.indexOfFirst { it == "Audit.LogEntry(Online)" }
         val openSession = labels.indexOfFirst { it == "OpenSession" }

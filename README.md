@@ -39,7 +39,7 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 |------|--------|--------------|-----------------|---------------|
 | **Flat (total)** | TrafficLight | `step(S,E) → StepResult` | `applyAccepted` | `productEvaluateTotal` |
 | **CSP / partial** | FileProtocol | `stepOffer(S,E) → OfferOutcome` | `applyOffer` | `productEvaluateOffer` |
-| **Hierarchical** | Connection | `dispatchWithDelegation` + `declaredEffects` → fragments | `applyFragments` then assign | `productEvaluateHierarchy` |
+| **Hierarchical** | Connection | `connectionStep` → `HierarchyStep` (dispatch + `declaredEffects`) | `applyFragments` then assign | `productEvaluateHierarchy` |
 | **Orthogonal** | DoorSystem | Region `step` → `StepResult` (+ container pure guards) | Region: `applyAccepted`; container refuse is CC-only | Compose region tables (`exportDoorSystem`) |
 
 **Outcome choice (critical):**
@@ -53,6 +53,7 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 | Family | Helpers | State assign vs apply | Used by |
 |--------|---------|----------------------|---------|
 | **Assign-then-apply** | `applyAccepted`, `applyOffer` | Assign `current = next` **first**, then cross-cutting, then domain (if any) | Flat, orthogonal regions, CSP offer |
+| **Refuse-only (CC)** | `applyRefusal` | No assign, no domain — cross-cutting only | Orthogonal container guards |
 | **Apply-then-assign** | `applyFragments` only | Apply per-fragment CC then domain **while still on old leaf**, then caller assigns if leaf changed | Hierarchical Connection |
 
 Hierarchical machines must **not** call `applyAccepted`: that assigns before exit effects and flattens per-fragment CC↔domain pairing (e.g. Online enter next to `OpenSession`).
@@ -66,11 +67,12 @@ Hierarchy:      pure plan → for each fragment (CC → domain) → assign leaf
 
 | Concern | Where |
 |---------|--------|
-| Dual-sink boundary apply | [`machine/BoundaryApply.kt`](src/main/kotlin/fsm/sample/machine/BoundaryApply.kt) — `applyAccepted` / `applyOffer` / `applyFragments` |
+| Dual-sink boundary apply | [`machine/BoundaryApply.kt`](src/main/kotlin/fsm/sample/machine/BoundaryApply.kt) — `applyAccepted` / `applyOffer` / `applyRefusal` / `applyFragments` |
 | Accept / refuse CC bundles | [`effect/CrossCuttingBundles.kt`](src/main/kotlin/fsm/sample/effect/CrossCuttingBundles.kt) — `acceptTransitionCrossCutting` / `refuseCrossCutting` (**pass machine `extras` / `traceDetail`**) |
-| Hierarchy path / LCA / plan | [`machine/Hierarchy.kt`](src/main/kotlin/fsm/sample/machine/Hierarchy.kt) — `pathFromRoot`, `commonPrefixLength`, `planTransition`, `dispatchWithDelegation` |
+| Hierarchy path / LCA / plan | [`machine/Hierarchy.kt`](src/main/kotlin/fsm/sample/machine/Hierarchy.kt) — `pathFromRoot`, `commonPrefixLength`, `planTransition` (`transitionExtras`), `dispatchWithDelegation` — **call these directly** (no vignette free-function wrappers) |
+| List recording bag | [`machine/RecordingPort.kt`](src/main/kotlin/fsm/sample/machine/RecordingPort.kt) — tiny open list sink; list-shaped vignette ports **subclass** it (not private bag + pass-through) |
 | Fragment shapes | [`machine/FragmentedEffects.kt`](src/main/kotlin/fsm/sample/machine/FragmentedEffects.kt) |
-| Pure outcomes | [`effect/StepResult.kt`](src/main/kotlin/fsm/sample/effect/StepResult.kt), [`effect/OfferOutcome.kt`](src/main/kotlin/fsm/sample/effect/OfferOutcome.kt) |
+| Pure outcomes | [`effect/StepResult.kt`](src/main/kotlin/fsm/sample/effect/StepResult.kt), [`effect/OfferOutcome.kt`](src/main/kotlin/fsm/sample/effect/OfferOutcome.kt), [`effect/HierarchyStep.kt`](src/main/kotlin/fsm/sample/effect/HierarchyStep.kt) |
 | Product export | [`export/ProductEvaluator.kt`](src/main/kotlin/fsm/sample/export/ProductEvaluator.kt), [`export/SampleExports.kt`](src/main/kotlin/fsm/sample/export/SampleExports.kt) |
 | Full design doc | [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) |
 | Shared dual-sink test helpers | [`src/test/kotlin/fsm/sample/testsupport/`](src/test/kotlin/fsm/sample/testsupport/) |
@@ -97,7 +99,7 @@ Hierarchy:      pure plan → for each fragment (CC → domain) → assign leaf
 
 ### Refuse-capable / CSP (copy FileProtocol)
 
-1. `stepOffer(S,E) → OfferOutcome` — construct/`is`/`when` on **`OfferOutcome.Accepted` / `Refused`** (not `OfferStep.*`; typealias is signature-only).
+1. `stepOffer(S,E) → OfferOutcome<S,D>` — construct/`is`/`when` on **`OfferOutcome.Accepted` / `Refused`** only (no `OfferStep` typealias).
 2. Refuse via `refuseCrossCutting`; accept extras include machine metrics (e.g. `csp.accept`).
 3. Boundary: `applyOffer` (domain only on Accepted).
 4. Export: `productEvaluateOffer`.
@@ -105,15 +107,48 @@ Hierarchy:      pure plan → for each fragment (CC → domain) → assign leaf
 ### Hierarchical (not “copy TrafficLight”)
 
 1. Leaves + parent links; pure `onEvent` / enter / exit fragments.
-2. Vignette-local `declaredEffects` (transition → `planTransition`; refuse package with correct `traceDetail`).
+2. Vignette-local `declaredEffects` — real leaf change → call **`machine.planTransition`** with ConnState lambdas (optional `transitionExtras`); same-leaf / refuse stay local.
 3. Boundary: **`applyFragments` then assign** if leaf changed — never `applyAccepted`.
-4. Export: `productEvaluateHierarchy` over pure dispatch + declared effects only.
+4. Export: `productEvaluateHierarchy` over the same pure gof `connectionStep` used by handle (no context construction; no dual `isUnhandled`/`nextOf` callbacks).
 
 ### Orthogonal (copy DoorSystem)
 
 1. Regions use the total-flat recipe + `applyAccepted`.
-2. Container pure guards use `refuseCrossCutting` (CC only; no domain on refuse).
+2. Container pure guards use `refuseCrossCutting` then **`applyRefusal`** (CC only; no domain on refuse).
 3. Share one `CrossCuttingEnv` + domain port across regions when teaching process-wide CC.
+
+### Domain ports (vignette-local)
+
+Ports are **vignette-local by law** — named accessors (`commands`, `ops`, `sessions`, `actuators`) and `applyDomain*` stay next to the domain ADT.
+
+For list-shaped recording only, **be** the shared bag (subclass) — do **not** keep a private `bag` that only re-exports `record`/`clear`/`items`:
+
+```kotlin
+// machine/RecordingPort.kt — open list bag only, not an effect engine
+open class RecordingPort<T> {
+    private val _items = mutableListOf<T>()
+    val items: List<T> get() = _items.toList()
+    fun record(item: T) { _items += item }
+    open fun clear() { _items.clear() }
+}
+
+// Vignette port recipe — subclass the bag; rename accessors; add snapshot:
+class MyPort : RecordingPort<MyOp>() {
+    val ops: List<MyOp> get() = items
+    // record / clear inherited
+    fun snapshot(): String = "ops=${ops.map { it.label() }}"
+}
+
+// Specialized fields (e.g. heartbeat) live on the same subclass:
+class ConnectionPort : RecordingPort<SessionOp>() {
+    val sessions: List<SessionOp> get() = items
+    var heartbeats: Int = 0; private set
+    fun incHeartbeat() { heartbeats += 1 }
+    override fun clear() { super.clear(); heartbeats = 0 }
+}
+```
+
+Do **not** invent a shared DomainPort hierarchy or generic apply engine.
 
 ### Manual `exportAllDocument` registration
 

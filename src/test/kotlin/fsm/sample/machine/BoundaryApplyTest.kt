@@ -169,6 +169,24 @@ class BoundaryApplyTest {
     }
 
     // -------------------------------------------------------------------------
+    // applyRefusal — container / guard: CC only, no domain, no assign
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `applyRefusal applies cross-cutting only`() {
+        val env = CrossCuttingEnv()
+        applyRefusal(
+            crossCutting = listOf(
+                auditRefusal("Door", "locked", "Open", "cannot open while locked"),
+                metricInc("door.refuse"),
+            ),
+            env = env,
+        )
+        assertEquals(1, env.metrics.get("door.refuse"))
+        assertEquals(1, env.log.snapshot().filter { it.kind == RecordKind.REFUSAL }.size)
+    }
+
+    // -------------------------------------------------------------------------
     // applyFragments — hierarchical: CC then domain per fragment; no assign
     // -------------------------------------------------------------------------
 

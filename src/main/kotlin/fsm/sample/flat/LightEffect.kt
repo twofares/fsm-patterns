@@ -1,5 +1,7 @@
 package fsm.sample.flat
 
+import fsm.sample.machine.RecordingPort
+
 /**
  * PURPOSE: TrafficLight **domain** effect ADT — hardware intents only.
  *
@@ -22,18 +24,14 @@ sealed class LightEffect {
     data class DriveLamp(val colorLabel: String) : LightEffect()
 }
 
-/** PURPOSE: In-memory domain port for lamp commands (no real hardware). */
-class LightPort {
-    private val _commands = mutableListOf<String>()
-    val commands: List<String> get() = _commands.toList()
+/**
+ * PURPOSE: In-memory domain port for lamp commands (no real hardware).
+ * **Is** the [RecordingPort] bag — no private bag + pass-through shell.
+ */
+class LightPort : RecordingPort<String>() {
+    val commands: List<String> get() = items
 
-    fun drive(colorLabel: String) {
-        _commands += colorLabel
-    }
-
-    fun clear() {
-        _commands.clear()
-    }
+    fun drive(colorLabel: String) = record(colorLabel)
 
     fun snapshot(): String = "lampCommands=$commands"
 }

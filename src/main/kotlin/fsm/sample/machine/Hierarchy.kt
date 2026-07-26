@@ -1,10 +1,14 @@
 package fsm.sample.machine
 
+import fsm.sample.effect.CrossCuttingEffect
 import fsm.sample.effect.acceptTransitionCrossCutting
 
 /**
  * PURPOSE: Shared hierarchical structure helpers — path/LCA assembly and parent-bubble
  * dispatch via type parameters + lambdas (no [HierarchicalState] interface).
+ *
+ * **One hierarchy API:** call these functions directly from vignettes (e.g. Connection).
+ * Do not re-export thin free-function wrappers that only bind lambdas.
  *
  * Vignette-local policy stays outside: Connection keeps [declaredEffects], onEvent,
  * enter/exit domain payloads, and Heartbeat/same_leaf metrics.
@@ -46,8 +50,13 @@ fun <S> commonPrefixLength(
  * PURPOSE: Pure assembly of hierarchical transition effects (LCA discipline).
  *
  * Fragment order: exit (innermost→outermost, exclusive of LCA) →
- * transition audit (via [acceptTransitionCrossCutting]) → [handlerDomain] →
- * enter (outermost→innermost, exclusive of LCA).
+ * transition audit (via [acceptTransitionCrossCutting] + optional [transitionExtras]) →
+ * [handlerDomain] → enter (outermost→innermost, exclusive of LCA).
+ *
+ * [transitionExtras] are first-class cross-cutting effects on the **leaf-change**
+ * transition fragment (metrics/trace that belong with the transition audit).
+ * Same-leaf reactions (e.g. Heartbeat) stay vignette-local in `declaredEffects`
+ * and do not use this parameter.
  *
  * Does **not** encode machine-specific same-leaf / heartbeat / refuse policy —
  * callers compose those in vignette-local `declaredEffects`.
@@ -62,6 +71,7 @@ fun <S, D> planTransition(
     parentOf: (S) -> S?,
     enterEffects: (S, String) -> FragmentedStepEffects<D>,
     exitEffects: (S, String) -> FragmentedStepEffects<D>,
+    transitionExtras: List<CrossCuttingEffect> = emptyList(),
 ): FragmentedStepEffects<D> {
     val fromPath = pathFromRoot(from, parentOf)
     val toPath = pathFromRoot(to, parentOf)
@@ -79,6 +89,7 @@ fun <S, D> planTransition(
             from = nameOf(from),
             event = eventLabel,
             to = nameOf(to),
+            extras = transitionExtras,
         ),
     )
 

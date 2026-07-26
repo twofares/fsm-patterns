@@ -4,6 +4,7 @@ import fsm.sample.csp.FileEvent
 import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.exportLabel
+import fsm.sample.effect.HierarchyStep
 import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.StepResult
 import fsm.sample.effect.exportLabels
@@ -14,15 +15,12 @@ import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnState
 import fsm.sample.gof.ConnectionEffect
-import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Online
 import fsm.sample.gof.Transferring
-import fsm.sample.gof.declaredEffects
-import fsm.sample.gof.dispatchWithDelegation
+import fsm.sample.gof.connectionStep
 import fsm.sample.gof.exportLabel
-import fsm.sample.machine.FragmentedStepEffects
 import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
@@ -43,11 +41,10 @@ import fsm.sample.orthogonal.exportLabel
  * Shared helpers:
  * - [productEvaluateTotal] — total flat / region steps ([StepResult])
  * - [productEvaluateOffer] — partial / menu steps ([OfferOutcome])
- * - [productEvaluateHierarchy] — leaf × event via probe + [FragmentedStepEffects]
+ * - [productEvaluateHierarchy] — leaf × event via sealed [HierarchyStep]
  *
  * Never calls per-machine interpreters, handle, or offer during export — only
- * pure step / stepOffer / planTransition / declaredEffects, plus pure hierarchical
- * [dispatchWithDelegation] (no [fsm.sample.gof.ConnectionContext]).
+ * pure step / stepOffer / hierarchy step adapters (no [fsm.sample.gof.ConnectionContext]).
  */
 
 // --- Generic product helpers -------------------------------------------------
@@ -124,49 +121,43 @@ fun <S, E, D> productEvaluateOffer(
 }
 
 /**
- * PURPOSE: Evaluate hierarchical leaf × event product via pure probe + declared effects.
+ * PURPOSE: Evaluate hierarchical leaf × event product via pure [HierarchyStep].
  *
- * [probe] yields a vignette handle-result [R] (e.g. Connection [HandleResult]).
- * [declaredEffects] stays **caller-supplied** so same-leaf / refuse policy remains
- * outside this helper. Never constructs context classes that run init side effects.
+ * Single [step] callback returns sealed handled/unhandled with effects already fused
+ * (no separate `isUnhandled` / `nextOf` / `declaredEffects` trio). Never constructs
+ * context classes that run init side effects.
  *
  * Unhandled → [TransitionKind.REFUSED] self-successor with [refusalNote].
- * Handled → [TransitionKind.ACCEPTED] with [nextOf] and fragmented export labels.
+ * Handled → [TransitionKind.ACCEPTED] with next + fragmented export labels.
  */
-fun <S, E, D, R> productEvaluateHierarchy(
+fun <S, E, D> productEvaluateHierarchy(
     machine: String,
     leaves: List<S>,
     events: List<E>,
     stateLabel: (S) -> String,
     eventLabel: (E) -> String,
-    probe: (S, E) -> R,
-    isUnhandled: (R) -> Boolean,
-    nextOf: (R) -> S,
-    declaredEffects: (S, E, R) -> FragmentedStepEffects<D>,
+    step: (S, E) -> HierarchyStep<S, D>,
     domainLabel: (D) -> String,
     refusalNote: String = "no state in hierarchy accepted event",
 ): TransitionTable {
     val rows = mutableListOf<TransitionRow>()
     for (leaf in leaves) {
         for (event in events) {
-            val result = probe(leaf, event)
-            val effects = declaredEffects(leaf, event, result)
-            if (isUnhandled(result)) {
-                rows += TransitionRow(
+            when (val result = step(leaf, event)) {
+                is HierarchyStep.Unhandled -> rows += TransitionRow(
                     from = stateLabel(leaf),
                     event = eventLabel(event),
                     to = stateLabel(leaf),
                     kind = TransitionKind.REFUSED,
-                    effects = effects.exportLabels(domainLabel),
+                    effects = result.effects.exportLabels(domainLabel),
                     note = refusalNote,
                 )
-            } else {
-                rows += TransitionRow(
+                is HierarchyStep.Handled -> rows += TransitionRow(
                     from = stateLabel(leaf),
                     event = eventLabel(event),
-                    to = stateLabel(nextOf(result)),
+                    to = stateLabel(result.next),
                     kind = TransitionKind.ACCEPTED,
-                    effects = effects.exportLabels(domainLabel),
+                    effects = result.effects.exportLabels(domainLabel),
                 )
             }
         }
@@ -243,8 +234,8 @@ fun evaluateSwingRegion(): TransitionTable {
 /**
  * PURPOSE: Hierarchical product for Connection via leaf × event probing.
  *
- * Thin adapter over [productEvaluateHierarchy]: pure [probeConnection] +
- * vignette-local [declaredEffects]. Never calls handle or apply sinks.
+ * Thin adapter over [productEvaluateHierarchy]: pure gof [connectionStep]
+ * (shared with [fsm.sample.gof.ConnectionContext.handle]). Never calls handle or apply sinks.
  */
 fun evaluateConnectionHierarchy(): TransitionTable = productEvaluateHierarchy(
     machine = "Connection",
@@ -258,21 +249,9 @@ fun evaluateConnectionHierarchy(): TransitionTable = productEvaluateHierarchy(
     ),
     stateLabel = { it.name },
     eventLabel = { it.label() },
-    probe = { leaf, event -> probeConnection(leaf, event) },
-    isUnhandled = { it is HandleResult.Unhandled },
-    nextOf = { (it as HandleResult.Handled).next },
-    declaredEffects = { leaf, event, result -> declaredEffects(leaf, event, result) },
+    step = { leaf, event -> connectionStep(leaf, event) },
     domainLabel = ConnectionEffect::exportLabel,
 )
-
-/**
- * PURPOSE: Pure hierarchical probe — no context, no interpreters, no ports.
- *
- * Uses shipped [dispatchWithDelegation] only. Heartbeat stays on the probed
- * leaf via [currentLeaf] without needing [ConnectionContext.current].
- */
-fun probeConnection(from: ConnState, event: ConnEvent): HandleResult =
-    dispatchWithDelegation(from, event, currentLeaf = from)
 
 /**
  * PURPOSE: Explicit hierarchy tree for Mermaid nesting (structure method 2).

@@ -1,6 +1,7 @@
 package fsm.sample.gof
 
 import fsm.sample.effect.CrossCuttingEnv
+import fsm.sample.effect.HierarchyStep
 import fsm.sample.effect.acceptTransitionCrossCutting
 import fsm.sample.effect.auditEntry
 import fsm.sample.effect.auditExit
@@ -9,10 +10,9 @@ import fsm.sample.effect.refuseCrossCutting
 import fsm.sample.effect.traceSpan
 import fsm.sample.machine.FragmentedStepEffects
 import fsm.sample.machine.applyFragments
-import fsm.sample.machine.commonPrefixLength as hierarchyCommonPrefixLength
-import fsm.sample.machine.dispatchWithDelegation as hierarchyDispatch
-import fsm.sample.machine.pathFromRoot as hierarchyPathFromRoot
-import fsm.sample.machine.planTransition as hierarchyPlanTransition
+import fsm.sample.machine.dispatchWithDelegation
+import fsm.sample.machine.pathFromRoot
+import fsm.sample.machine.planTransition
 
 /**
  * PURPOSE: GoF State pattern + hierarchical superstate delegation + entry/exit.
@@ -35,14 +35,14 @@ import fsm.sample.machine.planTransition as hierarchyPlanTransition
  *
  * Events unhandled in Idle/Transferring may still be handled by Online.
  *
- * Structural helpers ([pathFromRoot], [planTransition], [dispatchWithDelegation],
- * [FragmentedStepEffects]) live in `fsm.sample.machine` and are used via thin
- * ConnState wrappers here. Vignette-local policy stays local: [declaredEffects],
- * [ConnState.onEvent], enter/exit domain payloads, Heartbeat/same_leaf metrics,
- * and [HandleResult].
+ * **One hierarchy API:** call [pathFromRoot] / [planTransition] / [dispatchWithDelegation]
+ * from `fsm.sample.machine` directly (no public gof free-function wrappers named like
+ * those helpers). Conn binds dispatch once via internal [dispatchConnection].
+ * Vignette-local policy stays here: [declaredEffects], [ConnState.onEvent], enter/exit
+ * domain payloads, Heartbeat/same_leaf metrics, and [HandleResult].
  *
- * Export product evaluation uses pure [planTransition] / [declaredEffects] and
- * pure [dispatchWithDelegation] (no [ConnectionContext], no interpreters).
+ * Export product evaluation and [ConnectionContext.handle] share pure [connectionStep]
+ * ([dispatchConnection] + [declaredEffects] → [HierarchyStep]; no interpreters).
  */
 
 /** Closed event alphabet for the connection machine. */
@@ -200,50 +200,34 @@ data object Transferring : ConnState() {
     }
 }
 
-// --- Thin ConnState wrappers over shared hierarchy helpers --------------------
-
 /**
- * PURPOSE: Build root → leaf path for hierarchical entry/exit ordering.
- * Pure; no context or interpreter. Delegates to shared [hierarchyPathFromRoot].
- */
-fun pathFromRoot(leaf: ConnState): List<ConnState> =
-    hierarchyPathFromRoot(leaf) { it.parent }
-
-/** PURPOSE: Length of shared superstate prefix (LCA index into root→leaf paths). */
-fun commonPrefixLength(a: List<ConnState>, b: List<ConnState>): Int =
-    hierarchyCommonPrefixLength(a, b)
-
-/**
- * PURPOSE: Pure assembly of hierarchical transition effects (LCA discipline).
+ * PURPOSE: Conn vignette binding for parent-bubble dispatch — **not** a second public
+ * hierarchy API. Binds ConnState/ConnEvent/HandleResult lambdas once for
+ * [ConnectionContext.handle], export probe, and tests.
  *
- * Thin wrapper over shared [hierarchyPlanTransition]; enter/exit domain payloads
- * remain on [ConnState] objects. No Heartbeat / same-leaf policy here.
+ * Agents still call structural [dispatchWithDelegation] for new hierarchies;
+ * Connection uses this single adapter instead of triplicating the lambda set.
  */
-fun planTransition(
-    from: ConnState,
-    to: ConnState,
+internal fun dispatchConnection(
+    start: ConnState,
     event: ConnEvent,
-    handlerDomain: List<ConnectionEffect> = emptyList(),
-    machineName: String = "Connection",
-): FragmentedStepEffects<ConnectionEffect> =
-    hierarchyPlanTransition(
-        from = from,
-        to = to,
-        eventLabel = event.label(),
-        handlerDomain = handlerDomain,
-        machineName = machineName,
-        nameOf = { it.name },
+    currentLeaf: ConnState = start,
+): HandleResult =
+    dispatchWithDelegation(
+        start = start,
+        event = event,
+        currentLeaf = currentLeaf,
         parentOf = { it.parent },
-        enterEffects = { s, m -> s.enterEffects(m) },
-        exitEffects = { s, m -> s.exitEffects(m) },
+        onEvent = { node, e, leaf -> node.onEvent(e, leaf) },
+        isUnhandled = { it is HandleResult.Unhandled },
+        unhandled = HandleResult.Unhandled,
     )
 
 /**
  * PURPOSE: Pure effect assembly for a hierarchical (from, event, HandleResult) triple.
  *
- * Shared by [ConnectionContext.handle] and export product evaluation so assembly
- * cannot drift:
- * - real transition → [planTransition]
+ * Shared by [connectionStep] (and thus handle + export) so assembly cannot drift:
+ * - real transition → shared [planTransition] with ConnState lambdas
  * - same-leaf handled → one fragment (accept audit + connection-specific metric + handler domain)
  * - unhandled → [refuseCrossCutting] with `traceDetail = event.label()`
  *
@@ -258,7 +242,17 @@ fun declaredEffects(
     is HandleResult.Handled -> {
         val next = result.next
         if (next !== from) {
-            planTransition(from, next, event, result.domain, machineName)
+            planTransition(
+                from = from,
+                to = next,
+                eventLabel = event.label(),
+                handlerDomain = result.domain,
+                machineName = machineName,
+                nameOf = { it.name },
+                parentOf = { it.parent },
+                enterEffects = { s, m -> s.enterEffects(m) },
+                exitEffects = { s, m -> s.exitEffects(m) },
+            )
         } else {
             val metric = if (event is ConnEvent.Heartbeat) {
                 metricInc("connection.heartbeat")
@@ -291,45 +285,41 @@ fun declaredEffects(
 }
 
 /**
- * PURPOSE: Hierarchical event dispatch — walk leaf → parent until handled.
- * Pure control flow over shipped [ConnState.onEvent]; no effect application,
- * no [ConnectionContext] required (export-safe).
+ * PURPOSE: Pure Connection hierarchy step — fuse [dispatchConnection] + [declaredEffects].
  *
- * Thin wrapper over shared [hierarchyDispatch] with Connection's local [HandleResult].
- *
- * [currentLeaf] is the leaf active at dispatch start (defaults to [start]).
+ * Single pure product for leaf × event used by both [ConnectionContext.handle] and
+ * export [fsm.sample.export.evaluateConnectionHierarchy]. No context, no interpreters,
+ * no ports. Same-leaf / refuse policy remains inside [declaredEffects].
  */
-fun dispatchWithDelegation(
-    start: ConnState,
+fun connectionStep(
+    leaf: ConnState,
     event: ConnEvent,
-    currentLeaf: ConnState = start,
-): HandleResult =
-    hierarchyDispatch(
-        start = start,
-        event = event,
-        currentLeaf = currentLeaf,
-        parentOf = { it.parent },
-        onEvent = { node, e, leaf -> node.onEvent(e, leaf) },
-        isUnhandled = { it is HandleResult.Unhandled },
-        unhandled = HandleResult.Unhandled,
-    )
+    machineName: String = "Connection",
+): HierarchyStep<ConnState, ConnectionEffect> {
+    val result = dispatchConnection(leaf, event)
+    val effects = declaredEffects(leaf, event, result, machineName)
+    return when (result) {
+        is HandleResult.Handled -> HierarchyStep.Handled(next = result.next, effects = effects)
+        is HandleResult.Unhandled -> HierarchyStep.Unhandled(effects = effects)
+    }
+}
 
 /**
  * PURPOSE: GoF context — owns the current state object and performs transitions
  * by replacing it, with proper exit/enter chain for hierarchy.
  *
  * Transition algorithm (ordinary code, not an engine):
- * 1. Try current leaf; if Unhandled, walk parent chain until Handled or root.
- * 2. Assemble pure [declaredEffects] from the probe result.
- * 3. [applyFragments] while [current] is still the old leaf ("exit while still in
+ * 1. Pure [connectionStep] (dispatch + declaredEffects → [HierarchyStep]).
+ * 2. [applyFragments] while [current] is still the old leaf ("exit while still in
  *    old state"), then assign [current] if the leaf changed.
+ * 3. Refuse packages still apply CC fragments; return false without assigning.
  *
  * **Must not** use [fsm.sample.machine.applyAccepted] — wrong assign order and
  * loss of per-fragment CC↔domain pairing.
  *
  * Initial entry always runs on construction (outermost → innermost enter fragments)
  * so production paths get offline entry audit. Export never constructs this class —
- * it uses pure [dispatchWithDelegation] + [declaredEffects] only.
+ * it uses pure [connectionStep] only.
  *
  * Dual sinks: [crossCutting] env (audit/metrics/trace) + [port] (domain, including heartbeats).
  */
@@ -343,25 +333,28 @@ class ConnectionContext(
         private set
 
     init {
-        val effects = pathFromRoot(initial).fold(FragmentedStepEffects<ConnectionEffect>()) { acc, s ->
-            acc + s.enterEffects(machineName)
-        }
+        val effects = pathFromRoot(initial) { it.parent }
+            .fold(FragmentedStepEffects<ConnectionEffect>()) { acc, s ->
+                acc + s.enterEffects(machineName)
+            }
         applyFragments(effects, crossCutting, port, ::applyDomainConnection)
     }
 
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
-        val result = dispatchWithDelegation(fromLeaf, event, fromLeaf)
-        val effects = declaredEffects(fromLeaf, event, result, machineName)
         // Hierarchical recipe: apply fragments first, then assign if leaf changes.
-        applyFragments(effects, crossCutting, port, ::applyDomainConnection)
-        return when (result) {
-            is HandleResult.Unhandled -> false
-            is HandleResult.Handled -> {
-                if (result.next !== fromLeaf) {
-                    current = result.next
+        // Refuse packages still apply CC (same pure step as export).
+        return when (val step = connectionStep(fromLeaf, event, machineName)) {
+            is HierarchyStep.Handled -> {
+                applyFragments(step.effects, crossCutting, port, ::applyDomainConnection)
+                if (step.next !== fromLeaf) {
+                    current = step.next
                 }
                 true
+            }
+            is HierarchyStep.Unhandled -> {
+                applyFragments(step.effects, crossCutting, port, ::applyDomainConnection)
+                false
             }
         }
     }

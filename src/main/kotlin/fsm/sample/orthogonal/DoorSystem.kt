@@ -2,12 +2,12 @@ package fsm.sample.orthogonal
 
 import fsm.sample.effect.CrossCuttingEffect
 import fsm.sample.effect.CrossCuttingEnv
-import fsm.sample.effect.CrossCuttingInterpreter
 import fsm.sample.effect.StepResult
 import fsm.sample.effect.acceptTransitionCrossCutting
 import fsm.sample.effect.metricInc
 import fsm.sample.effect.refuseCrossCutting
 import fsm.sample.machine.applyAccepted
+import fsm.sample.machine.applyRefusal
 
 /**
  * PURPOSE: Orthogonal door — multi-family cross-cutting + domain actuators.
@@ -22,7 +22,7 @@ import fsm.sample.machine.applyAccepted
  *
  * Region boundaries use [applyAccepted]; accept preambles via
  * [acceptTransitionCrossCutting] with latch/swing extras; container guards via
- * [refuseCrossCutting] (`door.refuse` / `door.policy`).
+ * [refuseCrossCutting] + [applyRefusal] (`door.refuse` / `door.policy`).
  */
 
 sealed class LatchState {
@@ -221,7 +221,7 @@ class DoorSystem(
     fun handle(event: DoorEvent): Boolean {
         val refusal = guardRefusalEffects(event)
         if (refusal.isNotEmpty()) {
-            CrossCuttingInterpreter.apply(refusal, crossCutting)
+            applyRefusal(refusal, crossCutting)
             return false
         }
         return when (event) {

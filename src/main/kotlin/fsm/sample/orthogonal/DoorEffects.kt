@@ -1,5 +1,7 @@
 package fsm.sample.orthogonal
 
+import fsm.sample.machine.RecordingPort
+
 /**
  * PURPOSE: Orthogonal door **domain** effects — region actuators only.
  *
@@ -26,18 +28,12 @@ sealed class DoorActuator {
     fun label(): String = this::class.simpleName ?: toString()
 }
 
-/** PURPOSE: In-memory domain port for door actuators. */
-class DoorPort {
-    private val _actuators = mutableListOf<DoorActuator>()
-    val actuators: List<DoorActuator> get() = _actuators.toList()
-
-    fun record(a: DoorActuator) {
-        _actuators += a
-    }
-
-    fun clear() {
-        _actuators.clear()
-    }
+/**
+ * PURPOSE: In-memory domain port for door actuators.
+ * **Is** the [RecordingPort] bag — no private bag + pass-through shell.
+ */
+class DoorPort : RecordingPort<DoorActuator>() {
+    val actuators: List<DoorActuator> get() = items
 
     fun snapshot(): String = "actuators=${actuators.map { it.label() }}"
 }

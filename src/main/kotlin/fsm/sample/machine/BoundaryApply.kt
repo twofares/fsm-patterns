@@ -18,6 +18,7 @@ import fsm.sample.effect.StepResult
  * | Family | Helpers | State assign relative to apply |
  * |--------|---------|--------------------------------|
  * | Total / offer | [applyAccepted], [applyOffer] | **Assign first**, then CC, then domain (if any) |
+ * | Guard refuse | [applyRefusal] | No assign, no domain — CC only |
  * | Hierarchical | [applyFragments] only | **Apply fragments first**, then assign leaf in the caller |
  *
  * Hierarchical machines must **not** use [applyAccepted]: that would assign
@@ -67,6 +68,17 @@ fun <S, D, P> applyOffer(
         is OfferOutcome.Accepted -> applyDomain(result.domain, port)
         is OfferOutcome.Refused -> { /* domain forbidden */ }
     }
+}
+
+/**
+ * PURPOSE: Container / guard refuse boundary — cross-cutting only.
+ *
+ * No domain apply, no state assign. Use for orthogonal container guards
+ * (e.g. [fsm.sample.orthogonal.DoorSystem.handle]) so refuse stays in the
+ * same helper family as [applyOffer] refuse and cannot smuggle domain I/O.
+ */
+fun applyRefusal(crossCutting: List<CrossCuttingEffect>, env: CrossCuttingEnv) {
+    CrossCuttingInterpreter.apply(crossCutting, env)
 }
 
 /**

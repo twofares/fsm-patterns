@@ -39,7 +39,8 @@ class ConnectionMachineTest {
     @Test
     fun `Connect Offline to Idle keeps LogEntry Online immediately before OpenSession in labels and apply`() {
         // --- Pure export labels / fragment pairing ---
-        val result = dispatchWithDelegation(Offline, ConnEvent.Connect, Offline)
+        val from: ConnState = Offline
+        val result = dispatchConnection(from, ConnEvent.Connect)
         assertTrue(result is HandleResult.Handled)
         val effects = declaredEffects(Offline, ConnEvent.Connect, result)
         val labels = effects.exportLabels()

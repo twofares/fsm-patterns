@@ -11,16 +11,15 @@ import fsm.sample.flat.LightState
 import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.flat.transition
+import fsm.sample.effect.HierarchyStep
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
-import fsm.sample.gof.HandleResult
 import fsm.sample.gof.Idle
 import fsm.sample.gof.Offline
 import fsm.sample.gof.Transferring
-import fsm.sample.gof.declaredEffects
+import fsm.sample.gof.connectionStep
 import fsm.sample.gof.exportLabels
 import fsm.sample.effect.CrossCuttingEnv
-import fsm.sample.logging.RecordKind
 import fsm.sample.orthogonal.LatchEvent
 import fsm.sample.orthogonal.LatchMachine
 import fsm.sample.orthogonal.LatchState
@@ -205,7 +204,7 @@ class ProductEvaluatorTest {
     }
 
     @Test
-    fun `connection product effects match declaredEffects oracle including multi-family CC`() {
+    fun `connection product effects match connectionStep oracle including multi-family CC`() {
         val table = evaluateConnectionHierarchy()
         val leaves = listOf(Offline, Idle, Transferring)
         val events = listOf(
@@ -217,8 +216,11 @@ class ProductEvaluatorTest {
         )
         for (leaf in leaves) {
             for (event in events) {
-                val probe = probeConnection(leaf, event)
-                val expected = declaredEffects(leaf, event, probe)
+                val pure = connectionStep(leaf, event)
+                val expected = when (pure) {
+                    is HierarchyStep.Handled -> pure.effects
+                    is HierarchyStep.Unhandled -> pure.effects
+                }
                 val row = table.rows.single { it.from == leaf.name && it.event == event.label() }
                 assertEquals(
                     expected.exportLabels(),
@@ -272,8 +274,8 @@ class ProductEvaluatorTest {
         val hb = connTable.rows.single { it.from == Idle.name && it.event == ConnEvent.Heartbeat.label() }
         assertTrue(hb.effects.contains("IncHeartbeat"))
 
-        val probe = probeConnection(Idle, ConnEvent.Heartbeat)
-        assertTrue(probe is HandleResult.Handled)
+        val pure = connectionStep(Idle, ConnEvent.Heartbeat)
+        assertTrue(pure is HierarchyStep.Handled)
         assertEquals(0, live.port.heartbeats)
     }
 
