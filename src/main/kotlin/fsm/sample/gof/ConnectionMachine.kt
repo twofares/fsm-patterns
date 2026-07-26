@@ -342,20 +342,17 @@ class ConnectionContext(
 
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
-        // Hierarchical recipe: apply fragments first, then assign if leaf changes.
-        // Refuse packages still apply CC (same pure step as export).
-        return when (val step = connectionStep(fromLeaf, event, machineName)) {
+        // Hierarchical recipe: apply fragments first (accept and refuse), then assign if leaf changes.
+        val step = connectionStep(fromLeaf, event, machineName)
+        applyFragments(step.effects, crossCutting, port, ::applyDomainConnection)
+        return when (step) {
             is HierarchyStep.Handled -> {
-                applyFragments(step.effects, crossCutting, port, ::applyDomainConnection)
                 if (step.next !== fromLeaf) {
                     current = step.next
                 }
                 true
             }
-            is HierarchyStep.Unhandled -> {
-                applyFragments(step.effects, crossCutting, port, ::applyDomainConnection)
-                false
-            }
+            is HierarchyStep.Unhandled -> false
         }
     }
 }

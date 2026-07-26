@@ -14,12 +14,14 @@ import fsm.sample.machine.FragmentedStepEffects
  * Kind matrix: project README.
  */
 sealed class HierarchyStep<S, D> {
+    abstract val effects: FragmentedStepEffects<D>
+
     data class Handled<S, D>(
         val next: S,
-        val effects: FragmentedStepEffects<D>,
+        override val effects: FragmentedStepEffects<D>,
     ) : HierarchyStep<S, D>()
 
     data class Unhandled<S, D>(
-        val effects: FragmentedStepEffects<D>,
+        override val effects: FragmentedStepEffects<D>,
     ) : HierarchyStep<S, D>()
 }
