@@ -33,7 +33,7 @@ import fsm.sample.effect.StepResult
  *
  * Fragment types live in [FragmentedEffects.kt]; hierarchy path/LCA helpers in
  * [Hierarchy.kt]. Agent checklist and kind matrix: project README +
- * `docs/machine-authoring-surfaces.md`. CC list builders: [fsm.sample.effect.acceptTransitionCrossCutting].
+ * `docs/authoring-guide.md`. CC list builders: [fsm.sample.effect.acceptTransitionCrossCutting].
  */
 
 /**

@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
  * keep helpers tiny and call from sample tests.
  *
  * See README "Machine kinds" / "Two boundary families" and
- * docs/machine-authoring-surfaces.md §5.
+ * docs/authoring-guide.md.
  */
 
 /**

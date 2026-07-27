@@ -367,4 +367,29 @@ class ProductEvaluatorTest {
         assertTrue(doc.contains("FileProtocol"))
         assertTrue(doc.contains("Connection"))
     }
+
+    /**
+     * PURPOSE: Drive shipped [exportAllDocument] and assert README/export claims hold:
+     * four machines registered; timer labels and ε (eventless) rows present; pure evaluation only.
+     */
+    @Test
+    fun `exportAllDocument covers all kinds timers and automatic epsilon rows`() {
+        val doc = exportAllDocument()
+        for (machine in listOf("TrafficLight", "FileProtocol", "Connection", "DoorSystem")) {
+            assertTrue(doc.contains("## $machine"), "missing machine section $machine")
+        }
+        assertTrue(doc.contains("Timer.Arm("), "TrafficLight/Connection dwell or watchdog export")
+        assertTrue(doc.contains("Timer.Cancel("), "cancel labels on abort paths")
+        assertTrue(doc.contains("Flash"), "TrafficLight Flash intermediate state")
+        assertTrue(
+            doc.contains("| Flash | ε |") || doc.contains("| Flash | ε | Red |"),
+            "ε automatic row for Flash→Red; doc snippet=$doc".take(200),
+        )
+        // Flash→Red is productEvaluateAutomatic note=eventless
+        assertTrue(doc.contains("eventless"), "ε rows carry eventless note")
+        assertTrue(doc.contains("WatchdogTimeout") || doc.contains("Timer.Arm(connection.online.watchdog"),
+            "Connection watchdog visible in export")
+        assertTrue(doc.contains("```mermaid"), "Mermaid fences present")
+    }
 }
+

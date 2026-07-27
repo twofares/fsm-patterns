@@ -14,7 +14,7 @@ import fsm.sample.effect.acceptTransitionCrossCutting
  * enter/exit domain payloads, and Heartbeat/same_leaf metrics.
  *
  * Boundary is **apply-then-assign** via [applyFragments] — never [applyAccepted].
- * See README "Two boundary families" and `docs/machine-authoring-surfaces.md` §5.1 hierarchy steps.
+ * See README "Boundary families" and `docs/authoring-guide.md` hierarchical recipe.
  */
 
 /**
