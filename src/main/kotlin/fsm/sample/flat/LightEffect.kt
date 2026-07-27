@@ -13,13 +13,13 @@ import fsm.sample.machine.TimerPort
  * - [DriveLamp]: drive the signal lamp (this machine only).
  * - [Timer]: domain-like scheduling intent applied to [TimerPort], not [LightPort].
  *
- * Pure [step] declares crossCutting + domain; boundary applies
+ * Pure [step] / [automaticStep] declare crossCutting + domain; boundary applies
  * [CrossCuttingInterpreter] then domain → multi-port ([LightPort] + [TimerPort]).
  *
- * Domain policy (total / engagement-driven): [DriveLamp] is declared for every accepted
- * step, including self-loops (e.g. Emergency when already Red). Domain tracks the
- * engagement, not only identity changes of state. Color advances also Cancel then Arm
- * the single dwell timer ([LIGHT_DWELL_ID]).
+ * Domain policy:
+ * - Enter dwell color (Red/Green/Yellow): Cancel then Arm then DriveLamp.
+ * - Enter Flash (Emergency or Flash self-loop): Cancel then DriveLamp(Flash); no Arm.
+ * Domain tracks engagement (including self-loops), not only identity changes of state.
  */
 sealed class LightEffect {
     /**
@@ -40,29 +40,41 @@ const val DWELL_RED_MS = 30_000L
 const val DWELL_GREEN_MS = 25_000L
 const val DWELL_YELLOW_MS = 5_000L
 
-/** Dwell delay for a color state (pure table; no clock). */
-fun dwellMsFor(state: LightState): Long = when (state) {
+/**
+ * Dwell delay for a color state (pure table; no clock).
+ * [LightState.Flash] has no dwell — [automaticStep] owns exit.
+ */
+fun dwellMsFor(state: LightState): Long? = when (state) {
     LightState.Red -> DWELL_RED_MS
     LightState.Green -> DWELL_GREEN_MS
     LightState.Yellow -> DWELL_YELLOW_MS
+    LightState.Flash -> null
 }
 
 fun cancelDwell(): LightEffect = LightEffect.Timer(TimerIntent.Cancel(LIGHT_DWELL_ID))
 
-fun armDwell(forState: LightState): LightEffect =
-    LightEffect.Timer(
+fun armDwell(forState: LightState): LightEffect {
+    val ms = dwellMsFor(forState) ?: error("no dwell for $forState")
+    return LightEffect.Timer(
         TimerIntent.Arm(
             id = LIGHT_DWELL_ID,
-            delayMs = dwellMsFor(forState),
+            delayMs = ms,
             eventKey = LightEvent.DwellElapsed.label(),
         ),
     )
+}
 
 /** Domain for entering a dwell color: always Cancel then Arm then DriveLamp. */
 fun domainEnterDwellColor(color: LightState): List<LightEffect> = listOf(
     cancelDwell(),
     armDwell(color),
     LightEffect.DriveLamp(color.label()),
+)
+
+/** Domain for entering Flash: Cancel dwell (idempotent); DriveLamp Flash; no Arm. */
+fun domainEnterFlash(): List<LightEffect> = listOf(
+    cancelDwell(),
+    LightEffect.DriveLamp(LightState.Flash.label()),
 )
 
 /**

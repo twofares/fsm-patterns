@@ -9,7 +9,6 @@ import fsm.sample.csp.OfferResult
 import fsm.sample.csp.applyDomainFile
 import fsm.sample.effect.TimerIntent
 import fsm.sample.flat.DWELL_GREEN_MS
-import fsm.sample.flat.DWELL_RED_MS
 import fsm.sample.flat.LIGHT_DWELL_ID
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightEffect
@@ -18,6 +17,7 @@ import fsm.sample.flat.LightState
 import fsm.sample.flat.TrafficLight
 import fsm.sample.flat.applyDomainLight
 import fsm.sample.flat.domainEnterDwellColor
+import fsm.sample.flat.domainEnterFlash
 import fsm.sample.flat.step
 import fsm.sample.flat.transition
 import fsm.sample.gof.CONNECTION_WATCHDOG_ID
@@ -100,20 +100,23 @@ class EffectStepTest {
     }
 
     @Test
-    fun `TrafficLight Emergency adds Trace family and Cancel Arm DriveLamp for Red`() {
+    fun `TrafficLight Emergency adds Trace family and Cancel DriveLamp Flash`() {
         val result = step(LightState.Green, LightEvent.Emergency)
-        assertEquals(LightState.Red, result.next)
+        assertEquals(LightState.Flash, result.next)
         assertTrue(result.crossCutting.any { it is CrossCuttingEffect.Trace.Span })
+        assertTrue(
+            result.crossCutting.any {
+                it is CrossCuttingEffect.Trace.Span &&
+                    it.name == "light.emergency" &&
+                    it.detail == "emergency interrupt → Flash"
+            },
+        )
         assertTrue(result.crossCutting.none { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })
-        // PR 3 lock-in: Emergency still → Red with Cancel+Arm(Red)+DriveLamp (not Flash yet).
-        assertEquals(domainEnterDwellColor(LightState.Red), result.domain)
+        assertEquals(domainEnterFlash(), result.domain)
         assertEquals(
             listOf(
                 LightEffect.Timer(TimerIntent.Cancel(LIGHT_DWELL_ID)),
-                LightEffect.Timer(
-                    TimerIntent.Arm(LIGHT_DWELL_ID, DWELL_RED_MS, LightEvent.DwellElapsed.label()),
-                ),
-                LightEffect.DriveLamp("Red"),
+                LightEffect.DriveLamp("Flash"),
             ),
             result.domain,
         )
@@ -124,15 +127,22 @@ class EffectStepTest {
         val env = CrossCuttingEnv()
         val port = LightPort()
         val timers = TimerPort()
+        // Seed a green dwell so Emergency Cancel clears it (no re-Arm on Flash).
+        timers.apply(
+            listOf(
+                TimerIntent.Arm(LIGHT_DWELL_ID, DWELL_GREEN_MS, LightEvent.DwellElapsed.label()),
+            ),
+        )
+        assertEquals(1, timers.pending().size)
         val result = step(LightState.Yellow, LightEvent.Emergency)
         CrossCuttingInterpreter.apply(result.crossCutting, env)
         applyDomainLight(result.domain, port, timers)
         assertEquals(1, env.log.snapshot().filter { it.kind == RecordKind.TRANSITION }.size)
         assertTrue(env.metrics.get("fsm.transitions") >= 1)
         assertTrue(env.traces.spans.any { it.startsWith("light.emergency") })
-        assertEquals(listOf("Red"), port.commands)
-        assertEquals(1, timers.pending().size)
-        assertEquals(LIGHT_DWELL_ID, timers.pending()[0].id)
+        assertEquals(listOf("Flash"), port.commands)
+        // Flash entry Cancels dwell and does not Arm — pending empty.
+        assertTrue(timers.pending().isEmpty())
     }
 
     @Test

@@ -68,17 +68,18 @@ class CrossCuttingBundlesTest {
         val event = LightEvent.Emergency
         val pure = step(from, event)
         val to = pure.next.label()
+        assertEquals("Flash", to)
         val expected = listOf(
             auditTransition("TrafficLight", from.label(), event.label(), to),
             metricInc("fsm.transitions"),
-            traceSpan("light.emergency", "forced $to"),
+            traceSpan("light.emergency", "emergency interrupt → Flash"),
         )
         val viaHelper = acceptTransitionCrossCutting(
             machine = "TrafficLight",
             from = from.label(),
             event = event.label(),
             to = to,
-            extras = listOf(traceSpan("light.emergency", "forced $to")),
+            extras = listOf(traceSpan("light.emergency", "emergency interrupt → Flash")),
         )
         assertEquals(expected, pure.crossCutting)
         assertEquals(expected, viaHelper)
@@ -87,7 +88,7 @@ class CrossCuttingBundlesTest {
             pure.crossCutting.any {
                 it is CrossCuttingEffect.Trace.Span &&
                     it.name == "light.emergency" &&
-                    it.detail == "forced Red"
+                    it.detail == "emergency interrupt → Flash"
             },
         )
         assertTrue(pure.crossCutting.none { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })

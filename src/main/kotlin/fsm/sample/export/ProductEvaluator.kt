@@ -10,6 +10,7 @@ import fsm.sample.effect.StepResult
 import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
+import fsm.sample.flat.automaticStep
 import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.gof.ConnEvent
@@ -42,9 +43,10 @@ import fsm.sample.orthogonal.exportLabel
  * - [productEvaluateTotal] — total flat / region steps ([StepResult])
  * - [productEvaluateOffer] — partial / menu steps ([OfferOutcome])
  * - [productEvaluateHierarchy] — leaf × event via sealed [HierarchyStep]
+ * - [productEvaluateAutomatic] — eventless / ε edges via pure [automaticStep]
  *
- * Never calls per-machine interpreters, handle, or offer during export — only
- * pure step / stepOffer / hierarchy step adapters (no [fsm.sample.gof.ConnectionContext]).
+ * Never calls per-machine interpreters, handle, drainAutomatic, or offer during export — only
+ * pure step / stepOffer / hierarchy / automatic step adapters (no [fsm.sample.gof.ConnectionContext]).
  */
 
 // --- Generic product helpers -------------------------------------------------
@@ -165,21 +167,68 @@ fun <S, E, D> productEvaluateHierarchy(
     return TransitionTable(machine, rows)
 }
 
+/**
+ * PURPOSE: Evaluate pure eventless / completion edges (one [automaticStep] per state).
+ *
+ * States with no edge yield no row. Event label defaults to `ε`; [note] is `eventless`.
+ * Does not call [fsm.sample.machine.drainAutomatic] or any boundary / clock.
+ */
+fun <S, D> productEvaluateAutomatic(
+    machine: String,
+    states: List<S>,
+    stateLabel: (S) -> String,
+    automaticStep: (S) -> StepResult<S, D>?,
+    domainLabel: (D) -> String,
+    eventLabel: String = "ε",
+): List<TransitionRow> = states.mapNotNull { s ->
+    val result = automaticStep(s) ?: return@mapNotNull null
+    TransitionRow(
+        from = stateLabel(s),
+        event = eventLabel,
+        to = stateLabel(result.next),
+        kind = TransitionKind.ACCEPTED,
+        effects = result.exportLabels(domainLabel),
+        note = "eventless",
+    )
+}
+
 // --- Sample machines: product evaluation via shipped pure APIs ---------------
 
 /**
- * PURPOSE: Complete transition table for TrafficLight via pure [step].
- * Domain: all LightState × all LightEvent; effects from split StepResult lists.
+ * PURPOSE: Complete transition table for TrafficLight via pure [step] + [automaticStep].
+ * Domain: all LightState (incl. Flash) × all LightEvent Cartesian product, plus ε rows.
+ * Effects from split StepResult lists — no clocks / ports / handle.
  */
-fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
-    machine = "TrafficLight",
-    states = listOf(LightState.Red, LightState.Green, LightState.Yellow),
-    events = listOf(LightEvent.Tick, LightEvent.Emergency, LightEvent.DwellElapsed),
-    stateLabel = { it.label() },
-    eventLabel = { it.label() },
-    step = { s, e -> step(s, e) },
-    domainLabel = { it.exportLabel() },
-)
+fun evaluateTrafficLight(): TransitionTable {
+    val states = listOf(
+        LightState.Red,
+        LightState.Green,
+        LightState.Yellow,
+        LightState.Flash,
+    )
+    val events = listOf(
+        LightEvent.Tick,
+        LightEvent.Emergency,
+        LightEvent.DwellElapsed,
+    )
+    val total = productEvaluateTotal(
+        machine = "TrafficLight",
+        states = states,
+        events = events,
+        stateLabel = { it.label() },
+        eventLabel = { it.label() },
+        step = { s, e -> step(s, e) },
+        domainLabel = { it.exportLabel() },
+    )
+    val epsilon = productEvaluateAutomatic(
+        machine = "TrafficLight",
+        states = states,
+        stateLabel = { it.label() },
+        automaticStep = { s -> automaticStep(s) },
+        domainLabel = { it.exportLabel() },
+    )
+    return TransitionTable(machine = "TrafficLight", rows = total.rows + epsilon)
+}
 
 /**
  * PURPOSE: Complete CSP table for FileProtocol via pure [FileProtocol.stepOffer].

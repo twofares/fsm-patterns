@@ -8,6 +8,7 @@ import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.exportLabels
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
+import fsm.sample.flat.automaticStep
 import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
 import fsm.sample.flat.transition
@@ -40,11 +41,12 @@ import org.junit.jupiter.api.Test
 class ProductEvaluatorTest {
 
     @Test
-    fun `traffic light product rows match shipped transition`() {
+    fun `traffic light product rows match shipped transition including Flash self-loops`() {
         val table = evaluateTrafficLight()
-        val states = listOf(LightState.Red, LightState.Green, LightState.Yellow)
+        val states = listOf(LightState.Red, LightState.Green, LightState.Yellow, LightState.Flash)
         val events = listOf(LightEvent.Tick, LightEvent.Emergency, LightEvent.DwellElapsed)
-        assertEquals(states.size * events.size, table.rows.size)
+        // Cartesian total + one ε row (Flash → Red)
+        assertEquals(states.size * events.size + 1, table.rows.size)
 
         for (s in states) {
             for (e in events) {
@@ -54,13 +56,26 @@ class ProductEvaluatorTest {
                 assertEquals(TransitionKind.ACCEPTED, row.kind)
             }
         }
+
+        // Flash self-loops on every sealed event
+        for (e in events) {
+            val row = table.rows.single { it.from == "Flash" && it.event == e.label() }
+            assertEquals("Flash", row.to)
+        }
+        // Emergency from dwell colors → Flash
+        for (s in listOf(LightState.Red, LightState.Green, LightState.Yellow)) {
+            val row = table.rows.single { it.from == s.label() && it.event == "Emergency" }
+            assertEquals("Flash", row.to)
+        }
     }
 
     @Test
     fun `traffic light product effects match pure step`() {
         val table = evaluateTrafficLight()
-        for (s in listOf(LightState.Red, LightState.Green, LightState.Yellow)) {
-            for (e in listOf(LightEvent.Tick, LightEvent.Emergency, LightEvent.DwellElapsed)) {
+        val states = listOf(LightState.Red, LightState.Green, LightState.Yellow, LightState.Flash)
+        val events = listOf(LightEvent.Tick, LightEvent.Emergency, LightEvent.DwellElapsed)
+        for (s in states) {
+            for (e in events) {
                 val pure = step(s, e)
                 val row = table.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(pure.next.label(), row.to)
@@ -69,8 +84,34 @@ class ProductEvaluatorTest {
                 assertTrue(row.effects.any { it.startsWith("DriveLamp") }, "row=$row")
                 assertTrue(row.effects.any { it.startsWith("Metric") }, "row=$row")
                 assertTrue(row.effects.any { it.startsWith("Timer.Cancel") }, "row=$row")
-                assertTrue(row.effects.any { it.startsWith("Timer.Arm") }, "row=$row")
+                if (pure.next == LightState.Flash) {
+                    // Flash entry: Cancel + DriveLamp only — no Arm
+                    assertTrue(row.effects.none { it.startsWith("Timer.Arm") }, "row=$row")
+                    assertTrue(row.effects.any { it == "DriveLamp(Flash)" }, "row=$row")
+                } else {
+                    assertTrue(row.effects.any { it.startsWith("Timer.Arm") }, "row=$row")
+                }
             }
+        }
+    }
+
+    @Test
+    fun `traffic light epsilon product row Flash to Red matches automaticStep`() {
+        val table = evaluateTrafficLight()
+        val pure = automaticStep(LightState.Flash)!!
+        val row = table.rows.single { it.from == "Flash" && it.event == "ε" }
+        assertEquals("Red", row.to)
+        assertEquals(TransitionKind.ACCEPTED, row.kind)
+        assertEquals("eventless", row.note)
+        assertEquals(pure.exportLabels { it.exportLabel() }, row.effects)
+        assertTrue(row.effects.any { it.startsWith("Timer.Cancel") })
+        assertTrue(row.effects.any { it.startsWith("Timer.Arm") && it.contains("30000") })
+        assertTrue(row.effects.any { it == "DriveLamp(Red)" })
+        assertTrue(row.effects.any { it.contains("light.completion") })
+
+        // No ε rows for dwell colors
+        for (from in listOf("Red", "Green", "Yellow")) {
+            assertTrue(table.rows.none { it.from == from && it.event == "ε" })
         }
     }
 
