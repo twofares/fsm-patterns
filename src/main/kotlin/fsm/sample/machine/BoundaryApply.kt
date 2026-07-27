@@ -13,6 +13,11 @@ import fsm.sample.effect.StepResult
  * [CrossCuttingInterpreter] + domain apply stay consistent and refuse cannot
  * apply domain by accident.
  *
+ * Multi-port machines (TrafficLight, Connection) pass a domain lambda that
+ * closes over machine fields (`port` + `timers`); the `P` argument is the
+ * primary domain port for single-port machines and may be unused when fan-out
+ * needs more than one port.
+ *
  * ## Two ordering contracts (critical)
  *
  * | Family | Helpers | State assign relative to apply |

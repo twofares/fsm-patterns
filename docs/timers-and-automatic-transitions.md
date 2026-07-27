@@ -10,7 +10,15 @@
 | **Audience** | Senior engineers and coding agents extending this sample |
 | **Related** | [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) — **do not rewrite**; this design **extends** shared surfaces |
 
-**Shipped (PRs 1–5):** Timers (`TimerIntent` + `VirtualClock`/`TimerPort`), `drainAutomatic`, TrafficLight dwell + Flash→Red ε, and Connection Online watchdog are **in-tree**. Prefer the README kind matrix + Appendix A for day-to-day authoring. Sections below retain design history (goals, alternatives, PR plan); the “pre-implementation baseline” table is **not** live truth.
+**Shipped (PRs 1–6 + residuals):** Timers (`TimerIntent` + `VirtualClock`/`TimerPort`), `drainAutomatic`, TrafficLight dwell + Flash→Red ε, Connection Online watchdog, and vignette `fireDueTimeouts()` helpers are **in-tree**. Prefer the README kind matrix + Appendix A for day-to-day authoring.
+
+**As-built must-match (do not reintroduce):**
+- Inject only `clock`; own `val timers = TimerPort(clock)` — never a separate constructor-injected `TimerPort`.
+- Multi-port apply via lambdas `{ domain, _ -> applyDomain*(domain, port, timers) }` — no ignored-port private wrappers.
+- No `applyTimerIntents` free function; use `TimerPort.apply(list)` / `apply(single)`.
+- Client recipe: `clock.advance` → `pollDue` / optional `fireDueTimeouts()` on TrafficLight **and** ConnectionContext.
+
+Sketch snippets below may lag; when they conflict with this banner or with source under `src/`, **source wins**.
 
 ---
 
@@ -410,10 +418,13 @@ class TimerPort(private val clock: Clock = VirtualClock()) {
         return due
     }
 
+    /** Single-intent convenience for multi-port domain apply loops. */
+    fun apply(intent: TimerIntent) = apply(listOf(intent))
+
     fun clear() = pending.clear()
 }
 
-fun applyTimerIntents(intents: List<TimerIntent>, port: TimerPort) = port.apply(intents)
+// As-built: no free-function applyTimerIntents — call TimerPort.apply directly.
 ```
 
 ##### eventKey mapping recipe (required)
@@ -437,22 +448,15 @@ fun connEventFromTimerKey(eventKey: String): ConnEvent? = when (eventKey) {
     else -> null
 }
 
-// Test / demo drain recipe
-fun TrafficLight.fireDueTimeouts(): List<LightEvent> {
-    val fired = mutableListOf<LightEvent>()
-    for (due in timers.pollDue()) {
-        val event = lightEventFromTimerKey(due.eventKey)
-            ?: error("unknown timer eventKey=${due.eventKey}")
-        handle(event)
-        fired += event
-    }
-    return fired
-}
+// Test / demo drain recipe — vignette methods (TrafficLight and ConnectionContext both own this)
+// Shared recipe: pollDue → pure mapper → handle. Not used by product export.
+fun TrafficLight.fireDueTimeouts(): List<LightEvent> { /* pollDue → lightEventFromTimerKey → handle */ }
+fun ConnectionContext.fireDueTimeouts(): List<ConnEvent> { /* pollDue → connEventFromTimerKey → handle */ }
 ```
 
 **Must not:** start threads inside pure `step`; call `pollDue` from product export; auto-fire from `apply` without an explicit boundary drain; invent ad-hoc string keys not equal to `label()`.
 
-**Optional demo:** `WallClock : Clock` + a single-threaded scheduled executor that enqueues eventKeys onto a client queue—**DemoMain only**, not required for tests or export. DemoMain (PR 3/6) should show VirtualClock advance + `fireDueTimeouts` / mapper, not wall threads as the primary path.
+**Optional demo:** `WallClock : Clock` + a single-threaded scheduled executor that enqueues eventKeys onto a client queue—**DemoMain only**, not required for tests or export. DemoMain shows VirtualClock advance + `fireDueTimeouts` (TrafficLight dwell + Connection watchdog), not wall threads as the primary path.
 
 #### 3. Cancel-on-exit with hierarchical `applyFragments` / LCA
 
@@ -526,15 +530,15 @@ fun applyDomainLight(
     for (effect in domain) {
         when (effect) {
             is LightEffect.DriveLamp -> port.drive(effect.colorLabel)
-            is LightEffect.Timer -> timers.apply(listOf(effect.intent)) // INLINE
+            is LightEffect.Timer -> timers.apply(effect.intent) // INLINE single-intent
         }
     }
 }
 ```
 
-##### Canonical boundary call sites (lambda closes over TimerPort)
+##### Canonical boundary call sites (as-built)
 
-`applyAccepted` / `applyFragments` keep signature `(List<D>, P) -> Unit`. **Never** pass bare `::applyDomainLight` after the three-arg signature exists. Canonical recipes:
+`applyAccepted` / `applyFragments` keep signature `(List<D>, P) -> Unit`. **Never** pass bare two-arg `::applyDomainLight`. **Inject only `clock`**; own `val timers = TimerPort(clock)` as a property (never a separate constructor-injected port).
 
 ```kotlin
 // --- TrafficLight (flat total) ---
@@ -543,56 +547,56 @@ class TrafficLight(
     val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: LightPort = LightPort(),
     val clock: VirtualClock = VirtualClock(),
-    val timers: TimerPort = TimerPort(clock),
     private val machineName: String = "TrafficLight",
 ) {
+    val timers: TimerPort = TimerPort(clock) // always from clock
     var current: LightState = initial
         private set
 
-    private fun applyDomain(domain: List<LightEffect>, ignored: LightPort) {
-        applyDomainLight(domain, port, timers)
-    }
-
     fun handle(event: LightEvent): LightState {
+        // Multi-port: P required by applyAccepted; unused when fan-out closes over fields.
+        val applyDomain: (List<LightEffect>, LightPort) -> Unit =
+            { domain, _ -> applyDomainLight(domain, port, timers) }
         val result = step(current, event, machineName)
-        applyAccepted(result, crossCutting, port, ::applyDomain) { current = it }
+        applyAccepted(result, crossCutting, port, applyDomain) { current = it }
         val drain = drainAutomatic(
             start = current,
             automaticStep = { s -> automaticStep(s, machineName) },
             nextOf = { it.next },
         )
         for (micro in drain.microsteps) {
-            applyAccepted(micro, crossCutting, port, ::applyDomain) { current = it }
+            applyAccepted(micro, crossCutting, port, applyDomain) { current = it }
         }
         return current
     }
+
+    fun fireDueTimeouts(): List<LightEvent> { /* pollDue → lightEventFromTimerKey → handle */ }
 }
 
-// Equivalent one-liner style (also fine):
-// applyAccepted(result, crossCutting, port, { d, _ -> applyDomainLight(d, port, timers) }) { current = it }
-
-// --- ConnectionContext (hierarchy) — init AND handle ---
+// --- ConnectionContext (hierarchy) — same clock ownership ---
 class ConnectionContext(
     // ...
-    val timers: TimerPort = TimerPort(VirtualClock()),
+    val clock: VirtualClock = VirtualClock(),
+    // NO timers constructor param
 ) {
-    private fun applyDomain(domain: List<ConnectionEffect>, ignored: ConnectionPort) {
-        applyDomainConnection(domain, port, timers)
-    }
+    val timers: TimerPort = TimerPort(clock)
 
     init {
         val effects = pathFromRoot(initial) { it.parent }
             .fold(FragmentedStepEffects<ConnectionEffect>()) { acc, s ->
                 acc + s.enterEffects(machineName)
             }
-        // Offline enter has no timer; still use multi-port apply for uniformity
-        applyFragments(effects, crossCutting, port, ::applyDomain)
+        applyFragments(effects, crossCutting, port) { domain, _ ->
+            applyDomainConnection(domain, port, timers)
+        }
     }
 
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
         val step = connectionStep(fromLeaf, event, machineName)
-        applyFragments(step.effects, crossCutting, port, ::applyDomain)
+        applyFragments(step.effects, crossCutting, port) { domain, _ ->
+            applyDomainConnection(domain, port, timers)
+        }
         return when (step) {
             is HierarchyStep.Handled -> {
                 if (step.next !== fromLeaf) current = step.next
@@ -601,6 +605,8 @@ class ConnectionContext(
             is HierarchyStep.Unhandled -> false
         }
     }
+
+    fun fireDueTimeouts(): List<ConnEvent> { /* pollDue → connEventFromTimerKey → handle */ }
 }
 ```
 
@@ -951,24 +957,26 @@ stateDiagram-v2
 
 ### New shared surfaces
 
-| API | Kind | File (proposed) |
+| API | Kind | File (as-built) |
 |-----|------|-----------------|
 | `TimerIntent.Arm` / `Cancel` | Pure ADT | `effect/TimerIntent.kt` |
 | `Clock`, `VirtualClock` | Boundary clock | `machine/TimerPort.kt` |
-| `TimerPort`, `ScheduledTimeout` | Boundary port | `machine/TimerPort.kt` |
-| `applyTimerIntents` | Boundary helper | `machine/TimerPort.kt` |
+| `TimerPort`, `ScheduledTimeout`, `apply` / `apply(single)` | Boundary port | `machine/TimerPort.kt` |
+| ~~`applyTimerIntents`~~ | **Removed** — call `TimerPort.apply` | — |
 | `drainAutomatic`, `AutomaticDrainResult` (no truncated), `DEFAULT_MAX_MICROSTEPS` | Pure control helper | `machine/Automatic.kt` |
 | `productEvaluateAutomatic` | Export | `export/ProductEvaluator.kt` |
 
-### Vignette pure helpers (new)
+### Vignette pure helpers (as-built)
 
 | API | Location |
 |-----|----------|
 | `lightEventFromTimerKey` | `flat/` |
 | `connEventFromTimerKey` | `gof/` |
 | `automaticStep` | `flat/TrafficLight.kt` |
+| `TrafficLight.fireDueTimeouts` | `flat/TrafficLight.kt` (boundary helper) |
+| `ConnectionContext.fireDueTimeouts` | `gof/ConnectionMachine.kt` (boundary helper) |
 | `dwellMsFor` / `LIGHT_DWELL_ID` / dwell constants | `flat/` |
-| `CONNECTION_WATCHDOG_ID` | `gof/` |
+| `CONNECTION_WATCHDOG_ID` / `CONNECTION_WATCHDOG_MS` | `gof/` |
 
 ### Vignette changes (TrafficLight)
 
@@ -977,9 +985,9 @@ stateDiagram-v2
 | States: Red, Green, Yellow | + `Flash` |
 | Events: Tick, Emergency | + `DwellElapsed` |
 | Domain: `DriveLamp` only | + `LightEffect.Timer` |
-| `applyDomainLight(domain, port)` | `applyDomainLight(domain, port, timers)` + boundary lambda |
+| `applyDomainLight(domain, port)` | `applyDomainLight(domain, port, timers)` + `{ d, _ -> … }` lambda |
 | `handle` | applyAccepted (lambda) + drainAutomatic + apply each micro |
-| Context | + `clock: VirtualClock`, `timers: TimerPort` |
+| Context | inject `clock` only; `val timers = TimerPort(clock)` property; `fireDueTimeouts()` |
 | Emergency next | **Flash** (not Red); handle ends Red after drain |
 | Export | states include Flash; events include DwellElapsed; merge ε rows |
 
@@ -991,7 +999,8 @@ stateDiagram-v2
 | Online exit domain: CloseSession | Timer.Cancel + CloseSession |
 | Events | + `WatchdogTimeout` |
 | Domain ADT | + `ConnectionEffect.Timer` |
-| `::applyDomainConnection` | three-arg + lambda at **init and handle** |
+| `::applyDomainConnection` | three-arg + lambda at **init and handle** (`{ d, _ -> … }`) |
+| Context | inject `clock` only; `val timers = TimerPort(clock)`; `fireDueTimeouts()` |
 | Export | WatchdogTimeout in product; Timer.* labels on Connect/Disconnect paths |
 
 ### Boundary apply signatures
@@ -1296,19 +1305,21 @@ PR1 ∥ PR2. PR5 only needs PR1. PR4 needs PR2 **and** PR3. PR6 last.
 3. Pure `step`: on every path that leaves a timed color (or aborts it), declare **Cancel** then optional **Arm**; never touch `TimerPort`.
 4. `Arm(..., eventKey = MyEvent.Timeout.label())` only.
 5. Pure mapper `myEventFromTimerKey`.
-6. Context: `clock` + `timers`; `applyDomain*(domain, port, timers)` **inline** order.
-7. Boundary: lambda fan-out — **not** a third StepResult field; **not** bare two-arg `::applyDomain` after signature change.
-8. Client/test: `clock.advance`; `pollDue`; mapper; `handle`.
-9. Export: full Cartesian states×events; Timer labels; never clocks in evaluator.
-10. **Must not:** `StepResult.timers`; `CrossCuttingEffect.Timer`; `Thread.sleep` in step.
+6. Context: inject **only** `clock`; `val timers = TimerPort(clock)` property (never a separate ctor-injected port).
+7. `applyDomain*(domain, port, timers)` **inline** order; domain loops call `timers.apply(intent)`.
+8. Boundary: `{ domain, _ -> applyDomain*(domain, port, timers) }` — **not** a third StepResult field; **not** bare two-arg method ref.
+9. Client/test: `clock.advance` → `pollDue` / optional `fireDueTimeouts()` → mapper → `handle`.
+10. Export: full Cartesian states×events; Timer labels; never clocks in evaluator.
+11. **Must not:** `StepResult.timers`; `CrossCuttingEffect.Timer`; `Thread.sleep` in step; `applyTimerIntents` free function.
 
 ### Adding cancel-on-exit (hierarchy)
 
 1. Arm in enter domain; **Cancel first** in exit domain for owning superstate.
 2. Rely on `planTransition` LCA.
-3. applyFragments then assign; multi-port lambda at init **and** handle.
-4. Update fragment domain assertions (OpenSession + Arm); keep LogEntry before domain.
-5. Test pending across same-superstate vs exit.
+3. applyFragments then assign; multi-port lambda at init **and** handle; same clock-only injection.
+4. Optional `fireDueTimeouts()` for poll → mapper → handle (same recipe as flat).
+5. Update fragment domain assertions (OpenSession + Arm); keep LogEntry before domain.
+6. Test pending across same-superstate vs exit; Disconnect clears pending.
 
 ### Adding automatic completion
 

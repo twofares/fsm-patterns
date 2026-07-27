@@ -11,6 +11,7 @@ import fsm.sample.flat.LightState
 import fsm.sample.flat.TrafficLight
 import fsm.sample.flat.exportLabel
 import fsm.sample.flat.step
+import fsm.sample.gof.CONNECTION_WATCHDOG_MS
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
 import fsm.sample.orthogonal.DoorEvent
@@ -58,6 +59,12 @@ fun main() {
     conn.handle(ConnEvent.Connect)
     line("after Connect: state=${conn.current.name} pending=${conn.timers.pending()}")
     conn.handle(ConnEvent.Heartbeat)
+    // Deterministic watchdog fire — VirtualClock.advance + fireDueTimeouts
+    conn.clock.advance(CONNECTION_WATCHDOG_MS)
+    val connFired = conn.fireDueTimeouts()
+    line("after advance+fireDue: fired=$connFired state=${conn.current.name} pending=${conn.timers.pending()}")
+    // Re-connect then Disconnect to show cancel path (previous fire already Offline)
+    conn.handle(ConnEvent.Connect)
     conn.handle(ConnEvent.Disconnect)
     line("final=${conn.current.name} heartbeats=${conn.port.heartbeats} pending=${conn.timers.pending()}")
     line("CROSS-CUTTING audit log:")

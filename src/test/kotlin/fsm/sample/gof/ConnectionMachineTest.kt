@@ -215,18 +215,15 @@ class ConnectionMachineTest {
     }
 
     @Test
-    fun `fire due watchdog via clock advance mapper and handle`() {
+    fun `fireDueTimeouts maps WatchdogTimeout and goes Offline`() {
         val ctx = ConnectionContext()
         ctx.handle(ConnEvent.Connect)
         ctx.clock.advance(CONNECTION_WATCHDOG_MS)
-        val due = ctx.timers.pollDue()
-        assertEquals(1, due.size)
-        val event = connEventFromTimerKey(due.single().eventKey)
-            ?: error("unknown timer eventKey=${due.single().eventKey}")
-        assertEquals(ConnEvent.WatchdogTimeout, event)
-        assertTrue(ctx.handle(event))
+        val fired = ctx.fireDueTimeouts()
+        assertEquals(listOf(ConnEvent.WatchdogTimeout), fired)
         assertEquals(Offline, ctx.current)
         assertTrue(ctx.timers.pending().isEmpty())
+        assertEquals(listOf(SessionOp.Opened, SessionOp.Closed), ctx.port.sessions)
     }
 
     @Test

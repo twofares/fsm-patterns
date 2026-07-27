@@ -167,13 +167,10 @@ class TimerPortTest {
     }
 
     @Test
-    fun `applyTimerIntents helper delegates to port`() {
+    fun `apply single TimerIntent overload arms dueAtMs`() {
         val clock = VirtualClock(startMs = 10L)
         val port = TimerPort(clock)
-        applyTimerIntents(
-            listOf(TimerIntent.Arm(id = "x", delayMs = 5L, eventKey = "X")),
-            port,
-        )
+        port.apply(TimerIntent.Arm(id = "x", delayMs = 5L, eventKey = "X"))
         assertEquals(15L, port.pending().single().dueAtMs)
     }
 }

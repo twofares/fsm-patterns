@@ -360,37 +360,44 @@ fun connectionStep(
  * Dual sinks: [crossCutting] env (audit/metrics/trace) + domain multi-port
  * ([port] session + [timers] scheduling) — one domain list, two ports (not a third outcome field).
  * No automatic drain on Connection in v1.
+ *
+ * **Clock / timers coupling:** inject only [clock]. [timers] is always
+ * `TimerPort(clock)` so `clock.advance` and `timers.pollDue` / [fireDueTimeouts]
+ * stay in sync. Do not construct a separate [TimerPort] with a different clock.
  */
 class ConnectionContext(
     initial: ConnState = Offline,
     val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: ConnectionPort = ConnectionPort(),
     val clock: VirtualClock = VirtualClock(),
-    val timers: TimerPort = TimerPort(clock),
     val machineName: String = "Connection",
 ) {
+    /** Scheduler for this machine — always backed by [clock] (single injection point). */
+    val timers: TimerPort = TimerPort(clock)
+
     var current: ConnState = initial
         private set
-
-    /** Multi-port domain apply — closes over [port] + [timers]; list order is inline. */
-    private fun applyDomain(domain: List<ConnectionEffect>, ignored: ConnectionPort) {
-        applyDomainConnection(domain, port, timers)
-    }
 
     init {
         val effects = pathFromRoot(initial) { it.parent }
             .fold(FragmentedStepEffects<ConnectionEffect>()) { acc, s ->
                 acc + s.enterEffects(machineName)
             }
-        // Offline enter has no timer; still use multi-port apply for uniformity
-        applyFragments(effects, crossCutting, port, ::applyDomain)
+        // Offline enter has no timer; still use multi-port apply for uniformity.
+        // Multi-port: applyDomain lambda closes over [port] + [timers] (P is unused).
+        applyFragments(effects, crossCutting, port) { domain, _ ->
+            applyDomainConnection(domain, port, timers)
+        }
     }
 
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
         // Hierarchical recipe: apply fragments first (accept and refuse), then assign if leaf changes.
+        // Multi-port: domain lambda closes over [port] + [timers]; P is required by applyFragments only.
         val step = connectionStep(fromLeaf, event, machineName)
-        applyFragments(step.effects, crossCutting, port, ::applyDomain)
+        applyFragments(step.effects, crossCutting, port) { domain, _ ->
+            applyDomainConnection(domain, port, timers)
+        }
         return when (step) {
             is HierarchyStep.Handled -> {
                 if (step.next !== fromLeaf) {
@@ -400,5 +407,20 @@ class ConnectionContext(
             }
             is HierarchyStep.Unhandled -> false
         }
+    }
+
+    /**
+     * PURPOSE: Drain due timeouts from [timers], map eventKey → sealed event, re-enter [handle].
+     * Demo/test boundary recipe — not used by product export.
+     */
+    fun fireDueTimeouts(): List<ConnEvent> {
+        val fired = mutableListOf<ConnEvent>()
+        for (due in timers.pollDue()) {
+            val event = connEventFromTimerKey(due.eventKey)
+                ?: error("unknown timer eventKey=${due.eventKey}")
+            handle(event)
+            fired += event
+        }
+        return fired
     }
 }

@@ -169,20 +169,19 @@ class TrafficLight(
     var current: LightState = initial
         private set
 
-    private fun applyDomain(domain: List<LightEffect>, ignored: LightPort) {
-        applyDomainLight(domain, port, timers)
-    }
-
     fun handle(event: LightEvent): LightState {
+        // Multi-port: domain lambda closes over [port] + [timers]; P is required by applyAccepted only.
+        val applyDomain: (List<LightEffect>, LightPort) -> Unit =
+            { domain, _ -> applyDomainLight(domain, port, timers) }
         val result = step(current, event, machineName)
-        applyAccepted(result, crossCutting, port, ::applyDomain) { current = it }
+        applyAccepted(result, crossCutting, port, applyDomain) { current = it }
         val drain = drainAutomatic(
             start = current,
             automaticStep = { s -> automaticStep(s, machineName) },
             nextOf = { it.next },
         )
         for (micro in drain.microsteps) {
-            applyAccepted(micro, crossCutting, port, ::applyDomain) { current = it }
+            applyAccepted(micro, crossCutting, port, applyDomain) { current = it }
         }
         return current
     }

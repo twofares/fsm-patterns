@@ -83,7 +83,7 @@ fun applyDomainConnection(
             ConnectionEffect.IncHeartbeat -> port.incHeartbeat()
             ConnectionEffect.OpenSession -> port.record(SessionOp.Opened)
             ConnectionEffect.CloseSession -> port.record(SessionOp.Closed)
-            is ConnectionEffect.Timer -> timers.apply(listOf(effect.intent))
+            is ConnectionEffect.Timer -> timers.apply(effect.intent)
         }
     }
 }

@@ -54,6 +54,9 @@ class TimerPort(private val clock: Clock = VirtualClock()) {
         }
     }
 
+    /** Single-intent convenience for multi-port domain apply loops. */
+    fun apply(intent: TimerIntent) = apply(listOf(intent))
+
     fun pending(): List<ScheduledTimeout> = pending.values.toList()
 
     /**
@@ -72,5 +75,3 @@ class TimerPort(private val clock: Clock = VirtualClock()) {
 
     fun clear() = pending.clear()
 }
-
-fun applyTimerIntents(intents: List<TimerIntent>, port: TimerPort) = port.apply(intents)

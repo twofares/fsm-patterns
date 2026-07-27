@@ -98,7 +98,7 @@ fun applyDomainLight(domain: List<LightEffect>, port: LightPort, timers: TimerPo
     for (effect in domain) {
         when (effect) {
             is LightEffect.DriveLamp -> port.drive(effect.colorLabel)
-            is LightEffect.Timer -> timers.apply(listOf(effect.intent))
+            is LightEffect.Timer -> timers.apply(effect.intent)
         }
     }
 }
