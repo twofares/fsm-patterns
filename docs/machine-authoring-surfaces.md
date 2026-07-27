@@ -8,6 +8,8 @@
 | **Workspace** | `/Users/bstiles/Scratch/fsm` |
 | **Audience** | Senior engineers and coding agents extending this sample |
 
+**See also (extension, not a rewrite of this doc):** [timers-and-automatic-transitions.md](timers-and-automatic-transitions.md) — delayed send / cancel-on-exit and eventless completion microsteps on the pure-step + dual-sink model.
+
 ## Current-state errata (shipped code)
 
 This document began as a **planning / PR design** writeup. Prefer the project **README** as the agent authoring surface. Where historical sections below still show intermediate options, **shipped code** wins:
