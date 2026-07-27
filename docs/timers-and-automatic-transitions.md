@@ -10,16 +10,18 @@
 | **Audience** | Senior engineers and coding agents extending this sample |
 | **Related** | [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) — **do not rewrite**; this design **extends** shared surfaces |
 
+**Shipped (PRs 1–5):** Timers (`TimerIntent` + `VirtualClock`/`TimerPort`), `drainAutomatic`, TrafficLight dwell + Flash→Red ε, and Connection Online watchdog are **in-tree**. Prefer the README kind matrix + Appendix A for day-to-day authoring. Sections below retain design history (goals, alternatives, PR plan); the “pre-implementation baseline” table is **not** live truth.
+
 ---
 
 ## Overview
 
-The sample already teaches four pure-step machine kinds (flat total, CSP partial, hierarchical, orthogonal) with dual-sink declare → boundary apply, product export over pure APIs only, and no third-party FSM engine. What it does **not** teach—despite being first-class in SCXML, UML statecharts, Rhapsody, and industrial libraries—is:
+The sample teaches four pure-step machine kinds (flat total, CSP partial, hierarchical, orthogonal) with dual-sink declare → boundary apply, product export over pure APIs only, and no third-party FSM engine. **As shipped**, it also teaches:
 
-1. **Timer / delayed transitions** — delayed send, arm/cancel, timeout re-entry; today `Tick` and `Heartbeat` are ordinary external events supplied by the client.
-2. **Automatic / eventless / completion transitions** — pure steps always require an explicit sealed event; there is no eventless microstep after entry or after an accepted event, and no final-state / `done.state.*` story.
+1. **Timer / delayed transitions** — pure domain `TimerIntent` (Arm/Cancel), boundary `TimerPort` + `VirtualClock`, timeout re-entry as sealed events (`DwellElapsed`, `WatchdogTimeout`). External `Tick` / `Heartbeat` remain client-supplied teaching events (K14 / K15).
+2. **Automatic / eventless / completion transitions** — pure `automaticStep(S) → StepResult?` + boundary `drainAutomatic` after each external apply (TrafficLight Flash→Red ε). No public `Completion` alphabet pollution.
 
-This design adds both capabilities as **ordinary Kotlin** extensions of the existing dual-sink model: pure code **declares** arm/cancel and completion outcomes; boundaries **schedule** wall time and **drain** bounded automatic microsteps; product export **labels** `after` / `ε` edges without running clocks. No SCXML interpreter, no third-party engine, no abandonment of pure declare → boundary apply.
+Both capabilities are **ordinary Kotlin** extensions of the dual-sink model: pure code **declares** arm/cancel and completion outcomes; boundaries **schedule** wall time and **drain** bounded automatic microsteps; product export **labels** `after` / `ε` edges without running clocks. No SCXML interpreter, no third-party engine, no abandonment of pure declare → boundary apply.
 
 **Revision 2** fully specifies Flash × event total-step policy, dwell cancel on every color-changing path (no dangling timers), multi-port applyDomain lambdas (still one domain list), inline timer apply order, eventKey mappers, `drainAutomatic` throw-only shape, and expanded PR regression surfaces.
 
@@ -27,13 +29,15 @@ This design adds both capabilities as **ordinary Kotlin** extensions of the exis
 
 ## Background & Motivation
 
-### Current state (cited)
+### Pre-implementation baseline (historical — not live truth)
 
-| Kind | Sample | Pure surface | Boundary | Notes on “time” / completion |
+Before PRs 1–5, the sample had no timer or automatic surfaces. The table below is the **gap that motivated this design**; for as-built code, see README + vignettes (`LightEffect.Timer`, Flash/ε, Online Arm/Cancel).
+
+| Kind | Sample | Pure surface | Boundary | Notes on “time” / completion **(pre-PR)** |
 |------|--------|--------------|----------|------------------------------|
-| Flat total | [`flat/TrafficLight.kt`](src/main/kotlin/fsm/sample/flat/TrafficLight.kt) | `step(S,E) → StepResult` | `applyAccepted` | `LightEvent.Tick` is client-supplied; no arm/cancel |
+| Flat total | [`flat/TrafficLight.kt`](src/main/kotlin/fsm/sample/flat/TrafficLight.kt) | `step(S,E) → StepResult` | `applyAccepted` | `LightEvent.Tick` client-supplied only; **no** arm/cancel yet |
 | CSP partial | [`csp/FileProtocol.kt`](src/main/kotlin/fsm/sample/csp/FileProtocol.kt) | `stepOffer → OfferOutcome` | `applyOffer` | Menus; no final/done completion |
-| Hierarchical | [`gof/ConnectionMachine.kt`](src/main/kotlin/fsm/sample/gof/ConnectionMachine.kt) | `connectionStep → HierarchyStep` | `applyFragments` then assign | `ConnEvent.Heartbeat` is external; Online enter/exit already declare domain (`OpenSession`/`CloseSession`) |
+| Hierarchical | [`gof/ConnectionMachine.kt`](src/main/kotlin/fsm/sample/gof/ConnectionMachine.kt) | `connectionStep → HierarchyStep` | `applyFragments` then assign | `ConnEvent.Heartbeat` external; Online enter/exit domain only (`OpenSession`/`CloseSession`); **no** watchdog yet |
 | Orthogonal | [`orthogonal/DoorSystem.kt`](src/main/kotlin/fsm/sample/orthogonal/DoorSystem.kt) | Region `step` + container guards | `applyAccepted` / `applyRefusal` | No region-done / `done.state` |
 
 Shared dual-sink outcomes:

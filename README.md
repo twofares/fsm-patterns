@@ -27,7 +27,7 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 | `src/main/kotlin/fsm/sample/orthogonal/` | Orthogonal door regions + actuators |
 | `src/main/kotlin/fsm/sample/csp/` | CSP file protocol + I/O domain intents |
 | `src/main/kotlin/fsm/sample/effect/` | Dual-sink outcomes, CC vocabulary, bundles, env, interpreter |
-| `src/main/kotlin/fsm/sample/machine/` | Boundary apply + hierarchy structure (not an engine) |
+| `src/main/kotlin/fsm/sample/machine/` | Boundary apply, hierarchy structure, `TimerPort`/`VirtualClock`, `drainAutomatic` (not an engine) |
 | `src/main/kotlin/fsm/sample/logging/` | Transition audit log (one cross-cutting sink) |
 | `src/main/kotlin/fsm/sample/export/` | Product evaluation → Markdown + Mermaid |
 | `DemoMain.kt` / `ExportMain.kt` | Dual-surface demos (`VirtualClock` dwell fire in DemoMain) |
@@ -132,7 +132,7 @@ Full recipe: [`docs/timers-and-automatic-transitions.md`](docs/timers-and-automa
 1. Sealed timeout event; domain case wrapping `TimerIntent`; **`Arm(..., eventKey = TimeoutEvent.label())`** only.
 2. Pure step **declares** Cancel/Arm; never touches `TimerPort` or clocks.
 3. Boundary multi-port: `applyDomain*(domain, port, timers)` inline in domain list order — **not** a third outcome field.
-4. Client/test: `clock.advance` → `pollDue` / `fireDueTimeouts` → mapper → `handle` (no `Thread.sleep`).
+4. Client/test: `clock.advance` → `TimerPort.pollDue` → pure mapper → `handle` (no `Thread.sleep`). Optional vignette helper (TrafficLight only): `fireDueTimeouts()` wraps pollDue + mapper + handle.
 5. Automatic: pure `automaticStep(S) → StepResult?`; `handle` applies external then `drainAutomatic` (throw on bound/cycle).
 6. Export: full Cartesian (incl. intermediate states like Flash) + `productEvaluateAutomatic`; never run clocks in evaluators.
 7. Hierarchy cancel-on-exit: Arm in enter domain; **Cancel first** in exit domain for the owning superstate (LCA via `planTransition`).
@@ -236,7 +236,7 @@ Hierarchical Connection applies **fragments** (cross-cutting then domain per LCA
 | Timers: declare `TimerIntent` in domain only; `Arm(..., eventKey = Event.label())` + pure mapper | Clocks / `TimerPort` / `Thread.sleep` in pure step |
 | Multi-port: one domain list fans out in `applyDomain*` (inline order) | Third `StepResult` / outcome field for timers (`StepResult.timers`, `CrossCuttingEffect.Timer`) |
 | Cancel dwell/watchdog on every abort path (**Emergency → Flash**, Online exit) | Leave dangling armed timers after Emergency / Disconnect |
-| Tests & demos: `VirtualClock.advance` + `pollDue` / `fireDueTimeouts` | `Thread.sleep` to wait for timeouts |
+| Tests & demos: `VirtualClock.advance` + `TimerPort.pollDue` (+ optional vignette `fireDueTimeouts` like TrafficLight) | `Thread.sleep` to wait for timeouts |
 | Automatic: pure `automaticStep` + `drainAutomatic` after external apply | Public `Completion` event unless truly external; soft refuse on bound/cycle |
 
 ## Export tables
