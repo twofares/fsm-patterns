@@ -7,14 +7,19 @@ import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.OfferResult
 import fsm.sample.csp.applyDomainFile
+import fsm.sample.effect.TimerIntent
+import fsm.sample.flat.DWELL_GREEN_MS
+import fsm.sample.flat.LIGHT_DWELL_ID
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightEffect
 import fsm.sample.flat.LightPort
 import fsm.sample.flat.LightState
 import fsm.sample.flat.TrafficLight
 import fsm.sample.flat.applyDomainLight
+import fsm.sample.flat.domainEnterDwellColor
 import fsm.sample.flat.step
 import fsm.sample.flat.transition
+import fsm.sample.machine.TimerPort
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnState
 import fsm.sample.gof.ConnectionContext
@@ -78,7 +83,17 @@ class EffectStepTest {
         assertTrue(result.crossCutting.any { it is CrossCuttingEffect.Audit.LogTransition })
         assertTrue(result.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "fsm.transitions" })
         assertTrue(result.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })
-        assertEquals(listOf(LightEffect.DriveLamp("Green")), result.domain)
+        assertEquals(domainEnterDwellColor(LightState.Green), result.domain)
+        assertEquals(
+            listOf(
+                LightEffect.Timer(TimerIntent.Cancel(LIGHT_DWELL_ID)),
+                LightEffect.Timer(
+                    TimerIntent.Arm(LIGHT_DWELL_ID, DWELL_GREEN_MS, LightEvent.DwellElapsed.label()),
+                ),
+                LightEffect.DriveLamp("Green"),
+            ),
+            result.domain,
+        )
     }
 
     @Test
@@ -92,13 +107,16 @@ class EffectStepTest {
     fun `TrafficLight boundary apply splits CrossCuttingEnv and domain port`() {
         val env = CrossCuttingEnv()
         val port = LightPort()
+        val timers = TimerPort()
         val result = step(LightState.Yellow, LightEvent.Emergency)
         CrossCuttingInterpreter.apply(result.crossCutting, env)
-        applyDomainLight(result.domain, port)
+        applyDomainLight(result.domain, port, timers)
         assertEquals(1, env.log.snapshot().filter { it.kind == RecordKind.TRANSITION }.size)
         assertTrue(env.metrics.get("fsm.transitions") >= 1)
         assertTrue(env.traces.spans.any { it.startsWith("light.emergency") })
         assertEquals(listOf("Red"), port.commands)
+        assertEquals(1, timers.pending().size)
+        assertEquals(LIGHT_DWELL_ID, timers.pending()[0].id)
     }
 
     @Test
@@ -253,7 +271,7 @@ class EffectStepTest {
         val shared = CrossCuttingEnv()
         val light = step(LightState.Red, LightEvent.Tick)
         CrossCuttingInterpreter.apply(light.crossCutting, shared)
-        applyDomainLight(light.domain, LightPort())
+        applyDomainLight(light.domain, LightPort(), TimerPort())
         val file = FileProtocol().stepOffer(FileState.Closed, FileEvent.Open)
         CrossCuttingInterpreter.apply(file.crossCutting, shared)
         applyDomainFile((file as OfferOutcome.Accepted).domain, fsm.sample.csp.FilePort())

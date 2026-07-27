@@ -174,7 +174,7 @@ fun <S, E, D> productEvaluateHierarchy(
 fun evaluateTrafficLight(): TransitionTable = productEvaluateTotal(
     machine = "TrafficLight",
     states = listOf(LightState.Red, LightState.Green, LightState.Yellow),
-    events = listOf(LightEvent.Tick, LightEvent.Emergency),
+    events = listOf(LightEvent.Tick, LightEvent.Emergency, LightEvent.DwellElapsed),
     stateLabel = { it.label() },
     eventLabel = { it.label() },
     step = { s, e -> step(s, e) },

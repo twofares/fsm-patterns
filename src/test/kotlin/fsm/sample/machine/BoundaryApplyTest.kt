@@ -13,6 +13,7 @@ import fsm.sample.flat.LightPort
 import fsm.sample.flat.LightState
 import fsm.sample.flat.applyDomainLight
 import fsm.sample.logging.RecordKind
+import fsm.sample.machine.TimerPort
 import fsm.sample.testsupport.assertApplyAcceptedDualSinkOrder
 import fsm.sample.testsupport.assertDualSinksApplied
 import fsm.sample.testsupport.assertRefuseHasNoDomain
@@ -54,7 +55,7 @@ class BoundaryApplyTest {
             result = result,
             env = env,
             port = port,
-            applyDomain = { domain, p -> applyDomainLight(domain, p) },
+            applyDomain = { domain, p -> applyDomainLight(domain, p, TimerPort()) },
             assign = { current = it },
             crossCuttingApplied = { it.metrics.get("light.ticks") == 1 },
         )
@@ -86,7 +87,7 @@ class BoundaryApplyTest {
             applyDomain = { domain, p ->
                 // CC must already have updated metrics before domain runs.
                 order += if (env.metrics.get("probe") == 1) "cc-before-domain" else "cc-missing"
-                applyDomainLight(domain, p)
+                applyDomainLight(domain, p, TimerPort())
                 order += "domain-done"
             },
             assign = { order += "assign" },
@@ -121,7 +122,7 @@ class BoundaryApplyTest {
             port = port,
             applyDomain = { domain, p ->
                 order += "domain"
-                applyDomainLight(domain, p)
+                applyDomainLight(domain, p, TimerPort())
             },
             assign = {
                 order += "assign"
@@ -257,7 +258,7 @@ class BoundaryApplyTest {
                 ),
             ),
         )
-        applyFragments(effects, env, port, ::applyDomainLight)
+        applyFragments(effects, env, port) { domain, p -> applyDomainLight(domain, p, TimerPort()) }
         assertEquals(1, env.metrics.get("frag"))
         assertEquals(listOf("A"), port.commands)
     }
@@ -281,7 +282,7 @@ class BoundaryApplyTest {
         )
 
         // Hierarchical recipe: apply first, then assign if leaf changes.
-        applyFragments(fragments, env, port, ::applyDomainLight)
+        applyFragments(fragments, env, port) { domain, p -> applyDomainLight(domain, p, TimerPort()) }
         assertEquals("Offline", current) // still old leaf during/after apply
         val next = "Idle"
         if (next != fromLeaf) current = next
@@ -330,7 +331,7 @@ class BoundaryApplyTest {
             port = portAccepted,
             applyDomain = { domain, p ->
                 orderAccepted += "domain"
-                applyDomainLight(domain, p)
+                applyDomainLight(domain, p, TimerPort())
             },
             assign = {
                 orderAccepted += "assign:$it"
@@ -355,7 +356,7 @@ class BoundaryApplyTest {
                     // During hierarchical apply, leaf must still be the old state.
                     orderFragments += "leaf-during-apply:$currentFragments"
                 }
-                applyDomainLight(domain, p)
+                applyDomainLight(domain, p, TimerPort())
             },
         )
         val next = "Idle"

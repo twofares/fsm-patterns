@@ -43,7 +43,7 @@ class ProductEvaluatorTest {
     fun `traffic light product rows match shipped transition`() {
         val table = evaluateTrafficLight()
         val states = listOf(LightState.Red, LightState.Green, LightState.Yellow)
-        val events = listOf(LightEvent.Tick, LightEvent.Emergency)
+        val events = listOf(LightEvent.Tick, LightEvent.Emergency, LightEvent.DwellElapsed)
         assertEquals(states.size * events.size, table.rows.size)
 
         for (s in states) {
@@ -60,7 +60,7 @@ class ProductEvaluatorTest {
     fun `traffic light product effects match pure step`() {
         val table = evaluateTrafficLight()
         for (s in listOf(LightState.Red, LightState.Green, LightState.Yellow)) {
-            for (e in listOf(LightEvent.Tick, LightEvent.Emergency)) {
+            for (e in listOf(LightEvent.Tick, LightEvent.Emergency, LightEvent.DwellElapsed)) {
                 val pure = step(s, e)
                 val row = table.rows.single { it.from == s.label() && it.event == e.label() }
                 assertEquals(pure.next.label(), row.to)
@@ -68,6 +68,8 @@ class ProductEvaluatorTest {
                 assertTrue(row.effects.any { it.contains("LogTransition") }, "row=$row")
                 assertTrue(row.effects.any { it.startsWith("DriveLamp") }, "row=$row")
                 assertTrue(row.effects.any { it.startsWith("Metric") }, "row=$row")
+                assertTrue(row.effects.any { it.startsWith("Timer.Cancel") }, "row=$row")
+                assertTrue(row.effects.any { it.startsWith("Timer.Arm") }, "row=$row")
             }
         }
     }
