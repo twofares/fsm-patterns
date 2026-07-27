@@ -9,8 +9,8 @@ authoring guide. For how the code works today, start at the
 
 ## What this project is
 
-A **didactic Kotlin sample** under `~/TwoFares/Workspaces/fsm` that shows several
-classical state-machine disciplines as **ordinary application code**:
+A **didactic Kotlin sample** under `~/TwoFares/Workspaces/fsm-patterns` that shows
+several classical state-machine disciplines as **ordinary application code**:
 
 - no third-party FSM, statechart, or SCXML library
 - runtime dependencies limited to the Kotlin stdlib (plus JUnit for tests)
@@ -28,7 +28,7 @@ reference implementation of any one formal model.
 |--|--|
 | **Started** | 2026-07-24 (`Initial snapshot`) |
 | **Author (git)** | Brian Stiles (`bstiles@bstiles.net`) |
-| **Location** | `~/TwoFares/Workspaces/fsm` (moved from `~/Scratch/fsm` after the dual-sink / docs arc) |
+| **Location** | `~/TwoFares/Workspaces/fsm-patterns` (was `~/Scratch/fsm`, then briefly `~/TwoFares/Workspaces/fsm`) |
 | **Language / build** | Kotlin 2.1.x, Gradle, JDK 17–21 (workspace often pins Corretto 21) |
 
 ### Intent from day one
