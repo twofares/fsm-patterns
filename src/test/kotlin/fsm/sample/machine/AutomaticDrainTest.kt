@@ -94,6 +94,23 @@ class AutomaticDrainTest {
     }
 
     @Test
+    fun `detectCycles false still fails closed with BOUND on a cycle`() {
+        // Without cycle detection a self-loop would spin; bound must still throw BOUND (not CYCLE).
+        val max = 4
+        val ex = assertThrows(AutomaticBoundExceededException::class.java) {
+            drainAutomatic(
+                start = "A",
+                automaticStep = chain(mapOf("A" to "A")),
+                nextOf = ::nextOf,
+                detectCycles = false,
+                maxMicrosteps = max,
+            )
+        }
+        assertEquals(AutomaticBoundExceededException.Reason.BOUND, ex.reason)
+        assertEquals(max, ex.stepsTaken)
+    }
+
+    @Test
     fun `40-hop acyclic chain exceeds default bound and throws BOUND`() {
         // 40 distinct hops with DEFAULT_MAX_MICROSTEPS = 32 → BOUND (not CYCLE).
         val edges = (0 until 40).associate { i -> "S$i" to "S${i + 1}" }
@@ -145,5 +162,40 @@ class AutomaticDrainTest {
         )
         assertEquals("C", result.finalState)
         assertEquals(2, result.microsteps.size)
+    }
+
+    @Test
+    fun `maxMicrosteps zero is empty success when quiescent else BOUND`() {
+        val quiescent = drainAutomatic(
+            start = "A",
+            automaticStep = { null },
+            nextOf = ::nextOf,
+            maxMicrosteps = 0,
+        )
+        assertEquals("A", quiescent.finalState)
+        assertTrue(quiescent.microsteps.isEmpty())
+
+        val ex = assertThrows(AutomaticBoundExceededException::class.java) {
+            drainAutomatic(
+                start = "A",
+                automaticStep = chain(mapOf("A" to "B")),
+                nextOf = ::nextOf,
+                maxMicrosteps = 0,
+            )
+        }
+        assertEquals(AutomaticBoundExceededException.Reason.BOUND, ex.reason)
+        assertEquals(0, ex.stepsTaken)
+    }
+
+    @Test
+    fun `negative maxMicrosteps is rejected`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            drainAutomatic(
+                start = "A",
+                automaticStep = { null },
+                nextOf = ::nextOf,
+                maxMicrosteps = -1,
+            )
+        }
     }
 }

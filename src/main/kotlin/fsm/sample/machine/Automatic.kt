@@ -44,8 +44,10 @@ class AutomaticBoundExceededException(
  * - Empty drain: [automaticStep] returns null immediately → finalState = start, microsteps empty.
  * - Cycle: if [detectCycles] and [nextOf] yields a state already visited in this drain → [Reason.CYCLE].
  * - Bound: if an edge remains enabled after [maxMicrosteps] microsteps → [Reason.BOUND].
+ * - [maxMicrosteps] must be >= 0; zero means BOUND if any edge is enabled, else empty success.
  *
  * Pure: no ports, no clocks. Callers apply sinks for each entry in [AutomaticDrainResult.microsteps].
+ * [AutomaticDrainResult.microsteps] is a defensive snapshot (not the live builder list).
  */
 fun <S, R> drainAutomatic(
     start: S,
@@ -54,12 +56,13 @@ fun <S, R> drainAutomatic(
     detectCycles: Boolean = true,
     maxMicrosteps: Int = DEFAULT_MAX_MICROSTEPS,
 ): AutomaticDrainResult<S, R> {
+    require(maxMicrosteps >= 0) { "maxMicrosteps must be >= 0, was $maxMicrosteps" }
     val microsteps = mutableListOf<R>()
     val seen = linkedSetOf(start)
     var current = start
     repeat(maxMicrosteps) {
         val step = automaticStep(current)
-            ?: return AutomaticDrainResult(current, microsteps)
+            ?: return AutomaticDrainResult(current, microsteps.toList())
         val next = nextOf(step)
         microsteps += step
         if (detectCycles && next in seen) {
@@ -79,5 +82,5 @@ fun <S, R> drainAutomatic(
             reason = AutomaticBoundExceededException.Reason.BOUND,
         )
     }
-    return AutomaticDrainResult(current, microsteps)
+    return AutomaticDrainResult(current, microsteps.toList())
 }
