@@ -243,19 +243,20 @@ class ProductEvaluatorTest {
         assertTrue(connect.effects.any { it.contains("connection.session.open") || it.contains("Metric") })
 
         val disconnect = table.rows.single { it.from == Idle.name && it.event == ConnEvent.Disconnect.label() }
-        assertTrue(
-            disconnect.effects.any { it.startsWith("Timer.Cancel(") },
-            "Disconnect path must export Timer.Cancel; effects=${disconnect.effects}",
-        )
-        assertTrue(disconnect.effects.contains("CloseSession"))
+        val discCancel = disconnect.effects.indexOfFirst { it.startsWith("Timer.Cancel(") }
+        val discClose = disconnect.effects.indexOfFirst { it == "CloseSession" }
+        assertTrue(discCancel >= 0, "Disconnect path must export Timer.Cancel; effects=${disconnect.effects}")
+        assertTrue(discClose > discCancel, "Timer.Cancel must precede CloseSession; effects=${disconnect.effects}")
 
         val watchdog = table.rows.single {
             it.from == Idle.name && it.event == ConnEvent.WatchdogTimeout.label()
         }
         assertEquals(Offline.name, watchdog.to)
         assertEquals(TransitionKind.ACCEPTED, watchdog.kind)
-        assertTrue(watchdog.effects.contains("CloseSession"))
-        assertTrue(watchdog.effects.any { it.startsWith("Timer.Cancel(") })
+        val wdCancel = watchdog.effects.indexOfFirst { it.startsWith("Timer.Cancel(") }
+        val wdClose = watchdog.effects.indexOfFirst { it == "CloseSession" }
+        assertTrue(wdCancel >= 0, "WatchdogTimeout path must export Timer.Cancel; effects=${watchdog.effects}")
+        assertTrue(wdClose > wdCancel, "Timer.Cancel must precede CloseSession; effects=${watchdog.effects}")
 
         val start = table.rows.single {
             it.from == Idle.name && it.event == ConnEvent.StartTransfer.label()

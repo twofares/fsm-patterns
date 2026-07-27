@@ -160,7 +160,7 @@ class ConnectionMachineTest {
     }
 
     @Test
-    fun `StartTransfer keeps watchdog armed under Online LCA`() {
+    fun `Idle Transferring round-trip keeps watchdog armed under Online LCA`() {
         val ctx = ConnectionContext()
         ctx.handle(ConnEvent.Connect)
         val pendingAfterConnect = ctx.timers.pending()
@@ -168,7 +168,11 @@ class ConnectionMachineTest {
 
         assertTrue(ctx.handle(ConnEvent.StartTransfer))
         assertEquals(Transferring, ctx.current)
-        assertEquals(pendingAfterConnect, ctx.timers.pending(), "Idle↔Transferring must not re-arm or cancel")
+        assertEquals(pendingAfterConnect, ctx.timers.pending(), "Idle→Transferring must not re-arm or cancel")
+
+        assertTrue(ctx.handle(ConnEvent.FinishTransfer))
+        assertEquals(Idle, ctx.current)
+        assertEquals(pendingAfterConnect, ctx.timers.pending(), "Transferring→Idle must not re-arm or cancel")
         assertEquals(listOf(SessionOp.Opened), ctx.port.sessions)
     }
 
@@ -176,12 +180,26 @@ class ConnectionMachineTest {
     fun `Heartbeat does not re-arm watchdog`() {
         val ctx = ConnectionContext()
         ctx.handle(ConnEvent.Connect)
-        val dueAt = ctx.timers.pending().single().dueAtMs
+        val dueAtFromEnter = ctx.timers.pending().single().dueAtMs
+        // Advance so a mistaken re-Arm(CONNECTION_WATCHDOG_MS) would shift dueAtMs.
+        ctx.clock.advance(1_000L)
         assertTrue(ctx.handle(ConnEvent.Heartbeat))
         assertEquals(Idle, ctx.current)
         assertEquals(1, ctx.timers.pending().size)
-        assertEquals(dueAt, ctx.timers.pending().single().dueAtMs, "absolute deadline from Online enter")
+        assertEquals(
+            dueAtFromEnter,
+            ctx.timers.pending().single().dueAtMs,
+            "absolute deadline from Online enter; re-arm would yield now+${CONNECTION_WATCHDOG_MS}=${ctx.clock.nowMs() + CONNECTION_WATCHDOG_MS}",
+        )
         assertEquals(1, ctx.port.heartbeats)
+
+        when (val handled = Online.onEvent(ConnEvent.Heartbeat, Idle)) {
+            is HandleResult.Handled -> {
+                assertEquals(listOf(ConnectionEffect.IncHeartbeat), handled.domain)
+                assertTrue(handled.domain.none { it is ConnectionEffect.Timer })
+            }
+            is HandleResult.Unhandled -> error("expected Heartbeat handled by Online")
+        }
     }
 
     @Test
