@@ -1,7 +1,10 @@
 package fsm.sample.gof
 
 import fsm.sample.effect.CrossCuttingEnv
+import fsm.sample.effect.TimerIntent
 import fsm.sample.logging.RecordKind
+import fsm.sample.machine.TimerPort
+import fsm.sample.machine.VirtualClock
 import fsm.sample.machine.applyFragments
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -10,7 +13,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * PURPOSE: Drive shipped [ConnectionContext] for GoF state replacement,
- * hierarchical parent delegation, entry/exit ordering, and refusal.
+ * hierarchical parent delegation, entry/exit ordering, Online watchdog, and refusal.
  */
 class ConnectionMachineTest {
 
@@ -31,10 +34,9 @@ class ConnectionMachineTest {
     }
 
     /**
-     * PR 6 required gate: Connect Offline→Idle keeps `Audit.LogEntry(Online)` paired with
-     * `OpenSession` in **both** pure [exportLabels] order and boundary apply order.
-     * Online-session metric/trace may sit between them inside the same fragment; Idle entry
-     * must not. Fails if hierarchy is routed through applyAccepted or fragments are flattened.
+     * Fragment pairing gate: Connect Offline→Idle keeps `Audit.LogEntry(Online)` paired with
+     * domain `OpenSession` then `Timer.Arm` in **both** pure [exportLabels] order and boundary apply.
+     * Online-session metric/trace may sit between LogEntry and OpenSession; Idle entry must not.
      */
     @Test
     fun `Connect Offline to Idle keeps LogEntry Online immediately before OpenSession in labels and apply`() {
@@ -58,11 +60,25 @@ class ConnectionMachineTest {
         assertTrue(labelIdle > labelOpen, "LogEntry(Idle) must follow OpenSession; labels=$labels")
         val onlineFrag = effects.fragments.single { ConnectionEffect.OpenSession in it.domain }
         assertTrue(onlineFrag.crossCutting.any { it.exportLabel() == "Audit.LogEntry(Online)" })
-        assertEquals(listOf(ConnectionEffect.OpenSession), onlineFrag.domain)
+        assertEquals(
+            listOf(
+                ConnectionEffect.OpenSession,
+                ConnectionEffect.Timer(
+                    TimerIntent.Arm(
+                        id = CONNECTION_WATCHDOG_ID,
+                        delayMs = CONNECTION_WATCHDOG_MS,
+                        eventKey = ConnEvent.WatchdogTimeout.label(),
+                    ),
+                ),
+            ),
+            onlineFrag.domain,
+        )
+        assertTrue(labels.any { it.startsWith("Timer.Arm($CONNECTION_WATCHDOG_ID,") })
 
         // --- Boundary apply order: Online entry audit before OpenSession domain ---
         val env = CrossCuttingEnv()
         val port = ConnectionPort()
+        val timers = TimerPort(VirtualClock())
         val applyOrder = mutableListOf<String>()
         applyFragments(
             effects = effects,
@@ -85,7 +101,7 @@ class ConnectionMachineTest {
                             }
                             p.record(SessionOp.Opened)
                         }
-                        else -> applyDomainConnection(listOf(d), p)
+                        else -> applyDomainConnection(listOf(d), p, timers)
                     }
                 }
             },
@@ -96,15 +112,110 @@ class ConnectionMachineTest {
             "applyFragments must run Online enter CC before OpenSession and before Idle entry",
         )
         assertEquals(listOf(SessionOp.Opened), port.sessions)
+        assertEquals(1, timers.pending().size)
+        assertEquals(CONNECTION_WATCHDOG_ID, timers.pending().single().id)
 
         // Live handle path must match the same pairing (applyFragments, not applyAccepted).
         val live = ConnectionContext()
         live.handle(ConnEvent.Connect)
         assertEquals(listOf(SessionOp.Opened), live.port.sessions)
+        assertEquals(1, live.timers.pending().size)
         val liveLog = live.crossCutting.log.snapshot()
         val liveOnline = liveLog.indexOfFirst { it.kind == RecordKind.ENTRY && it.to == "Online" }
         assertTrue(liveOnline >= 0)
         assertEquals(Idle, live.current)
+    }
+
+    @Test
+    fun `Online exit domain is Cancel then CloseSession`() {
+        val effects = Online.exitEffects("Connection")
+        assertEquals(
+            listOf(
+                ConnectionEffect.Timer(TimerIntent.Cancel(CONNECTION_WATCHDOG_ID)),
+                ConnectionEffect.CloseSession,
+            ),
+            effects.domain,
+        )
+        val labels = effects.exportLabels()
+        val cancelIdx = labels.indexOfFirst { it == "Timer.Cancel($CONNECTION_WATCHDOG_ID)" }
+        val closeIdx = labels.indexOfFirst { it == "CloseSession" }
+        assertTrue(cancelIdx >= 0, "missing Timer.Cancel in $labels")
+        assertTrue(closeIdx > cancelIdx, "CloseSession must follow Cancel; labels=$labels")
+    }
+
+    @Test
+    fun `Connect arms watchdog and Disconnect leaves pending empty`() {
+        val ctx = ConnectionContext()
+        assertTrue(ctx.timers.pending().isEmpty(), "no watchdog before Online enter")
+        ctx.handle(ConnEvent.Connect)
+        assertEquals(1, ctx.timers.pending().size)
+        assertEquals(CONNECTION_WATCHDOG_ID, ctx.timers.pending().single().id)
+        assertEquals(ConnEvent.WatchdogTimeout.label(), ctx.timers.pending().single().eventKey)
+        assertEquals(CONNECTION_WATCHDOG_MS, ctx.timers.pending().single().dueAtMs - ctx.clock.nowMs())
+
+        assertTrue(ctx.handle(ConnEvent.Disconnect))
+        assertEquals(Offline, ctx.current)
+        assertTrue(ctx.timers.pending().isEmpty(), "Online exit must cancel watchdog")
+        assertEquals(listOf(SessionOp.Opened, SessionOp.Closed), ctx.port.sessions)
+    }
+
+    @Test
+    fun `StartTransfer keeps watchdog armed under Online LCA`() {
+        val ctx = ConnectionContext()
+        ctx.handle(ConnEvent.Connect)
+        val pendingAfterConnect = ctx.timers.pending()
+        assertEquals(1, pendingAfterConnect.size)
+
+        assertTrue(ctx.handle(ConnEvent.StartTransfer))
+        assertEquals(Transferring, ctx.current)
+        assertEquals(pendingAfterConnect, ctx.timers.pending(), "Idle↔Transferring must not re-arm or cancel")
+        assertEquals(listOf(SessionOp.Opened), ctx.port.sessions)
+    }
+
+    @Test
+    fun `Heartbeat does not re-arm watchdog`() {
+        val ctx = ConnectionContext()
+        ctx.handle(ConnEvent.Connect)
+        val dueAt = ctx.timers.pending().single().dueAtMs
+        assertTrue(ctx.handle(ConnEvent.Heartbeat))
+        assertEquals(Idle, ctx.current)
+        assertEquals(1, ctx.timers.pending().size)
+        assertEquals(dueAt, ctx.timers.pending().single().dueAtMs, "absolute deadline from Online enter")
+        assertEquals(1, ctx.port.heartbeats)
+    }
+
+    @Test
+    fun `WatchdogTimeout goes Offline and closes session with empty pending`() {
+        val ctx = ConnectionContext()
+        ctx.handle(ConnEvent.Connect)
+        assertEquals(Idle, ctx.current)
+
+        assertTrue(ctx.handle(ConnEvent.WatchdogTimeout))
+        assertEquals(Offline, ctx.current)
+        assertTrue(ctx.timers.pending().isEmpty())
+        assertEquals(listOf(SessionOp.Opened, SessionOp.Closed), ctx.port.sessions)
+    }
+
+    @Test
+    fun `fire due watchdog via clock advance mapper and handle`() {
+        val ctx = ConnectionContext()
+        ctx.handle(ConnEvent.Connect)
+        ctx.clock.advance(CONNECTION_WATCHDOG_MS)
+        val due = ctx.timers.pollDue()
+        assertEquals(1, due.size)
+        val event = connEventFromTimerKey(due.single().eventKey)
+            ?: error("unknown timer eventKey=${due.single().eventKey}")
+        assertEquals(ConnEvent.WatchdogTimeout, event)
+        assertTrue(ctx.handle(event))
+        assertEquals(Offline, ctx.current)
+        assertTrue(ctx.timers.pending().isEmpty())
+    }
+
+    @Test
+    fun `connEventFromTimerKey maps WatchdogTimeout label only`() {
+        assertEquals(ConnEvent.WatchdogTimeout, connEventFromTimerKey(ConnEvent.WatchdogTimeout.label()))
+        assertEquals(null, connEventFromTimerKey("DwellElapsed"))
+        assertEquals(null, connEventFromTimerKey(""))
     }
 
     @Test
@@ -142,6 +253,7 @@ class ConnectionMachineTest {
         // Leave Transferring then Online before Offline entry path
         assertTrue(exits.contains("Transferring"))
         assertTrue(exits.contains("Online"))
+        assertTrue(ctx.timers.pending().isEmpty())
     }
 
     @Test

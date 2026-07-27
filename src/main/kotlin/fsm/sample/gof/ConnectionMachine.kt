@@ -2,6 +2,7 @@ package fsm.sample.gof
 
 import fsm.sample.effect.CrossCuttingEnv
 import fsm.sample.effect.HierarchyStep
+import fsm.sample.effect.TimerIntent
 import fsm.sample.effect.acceptTransitionCrossCutting
 import fsm.sample.effect.auditEntry
 import fsm.sample.effect.auditExit
@@ -9,6 +10,8 @@ import fsm.sample.effect.metricInc
 import fsm.sample.effect.refuseCrossCutting
 import fsm.sample.effect.traceSpan
 import fsm.sample.machine.FragmentedStepEffects
+import fsm.sample.machine.TimerPort
+import fsm.sample.machine.VirtualClock
 import fsm.sample.machine.applyFragments
 import fsm.sample.machine.dispatchWithDelegation
 import fsm.sample.machine.pathFromRoot
@@ -25,7 +28,7 @@ import fsm.sample.machine.planTransition
  *    pure-ish handlers return next leaf + domain; pure [declaredEffects] assembles LCA
  *    fragments; the context boundary applies each fragment via [applyFragments]
  *    (cross-cutting then domain via [fsm.sample.effect.CrossCuttingInterpreter] +
- *    [applyDomainConnection]).
+ *    multi-port [applyDomainConnection] with [TimerPort]).
  *
  * Domain vignette: a network connection with hierarchy
  *   Offline (leaf)
@@ -34,6 +37,7 @@ import fsm.sample.machine.planTransition
  *     └── Transferring (leaf)
  *
  * Events unhandled in Idle/Transferring may still be handled by Online.
+ * Online enter arms absolute watchdog; exit cancels it (Heartbeat does **not** re-arm).
  *
  * **One hierarchy API:** call [pathFromRoot] / [planTransition] / [dispatchWithDelegation]
  * from `fsm.sample.machine` directly (no public gof free-function wrappers named like
@@ -53,8 +57,22 @@ sealed class ConnEvent {
     data object FinishTransfer : ConnEvent()
     /** Handled only at Online superstate level (heartbeat while connected). */
     data object Heartbeat : ConnEvent()
+    /**
+     * Timeout re-entry for the Online watchdog — armed on Online enter, cancelled on exit.
+     * Handled at Online (same next leaf as Disconnect).
+     */
+    data object WatchdogTimeout : ConnEvent()
 
     fun label(): String = this::class.simpleName ?: toString()
+}
+
+/**
+ * PURPOSE: Pure mapper from [TimerIntent.Arm.eventKey] to sealed [ConnEvent].
+ * eventKey MUST equal [ConnEvent.label]; no reflection.
+ */
+fun connEventFromTimerKey(eventKey: String): ConnEvent? = when (eventKey) {
+    ConnEvent.WatchdogTimeout.label() -> ConnEvent.WatchdogTimeout
+    else -> null
 }
 
 /**
@@ -134,15 +152,19 @@ data object Offline : ConnState() {
 
 /**
  * PURPOSE: Composite superstate "Online".
- * Provides shared online behavior (Disconnect, Heartbeat) via hierarchical
+ * Provides shared online behavior (Disconnect, Heartbeat, WatchdogTimeout) via hierarchical
  * delegation: leaves that do not handle these events fall through to here.
+ *
+ * Watchdog policy (absolute deadline from Online enter; Heartbeat does **not** re-arm):
+ * - enter domain: OpenSession then Timer.Arm(watchdog)
+ * - exit domain: Timer.Cancel then CloseSession (Cancel first — load-bearing order)
  */
 data object Online : ConnState() {
     override val name: String = "Online"
     override val parent: ConnState? get() = null
 
     /**
-     * PURPOSE: Enter Online = cross-cutting entry audit + **domain** OpenSession.
+     * PURPOSE: Enter Online = cross-cutting entry audit + **domain** OpenSession then watchdog Arm.
      * Fires only when the LCA path includes Online (not on Idle↔Transferring).
      */
     override fun enterEffects(machineName: String): FragmentedStepEffects<ConnectionEffect> =
@@ -152,11 +174,21 @@ data object Online : ConnState() {
                 metricInc("connection.session.open"),
                 traceSpan("connection.session", "open"),
             ),
-            domain = listOf(ConnectionEffect.OpenSession),
+            domain = listOf(
+                ConnectionEffect.OpenSession,
+                ConnectionEffect.Timer(
+                    TimerIntent.Arm(
+                        id = CONNECTION_WATCHDOG_ID,
+                        delayMs = CONNECTION_WATCHDOG_MS,
+                        eventKey = ConnEvent.WatchdogTimeout.label(),
+                    ),
+                ),
+            ),
         )
 
     /**
-     * PURPOSE: Exit Online = cross-cutting exit audit + **domain** CloseSession.
+     * PURPOSE: Exit Online = cross-cutting exit audit + **domain** Cancel then CloseSession.
+     * Cancel-first so inline multi-port apply clears the timer before session close.
      */
     override fun exitEffects(machineName: String): FragmentedStepEffects<ConnectionEffect> =
         FragmentedStepEffects.of(
@@ -165,13 +197,17 @@ data object Online : ConnState() {
                 metricInc("connection.session.close"),
                 traceSpan("connection.session", "close"),
             ),
-            domain = listOf(ConnectionEffect.CloseSession),
+            domain = listOf(
+                ConnectionEffect.Timer(TimerIntent.Cancel(CONNECTION_WATCHDOG_ID)),
+                ConnectionEffect.CloseSession,
+            ),
         )
 
     override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
-        ConnEvent.Disconnect -> HandleResult.Handled(Offline)
+        ConnEvent.Disconnect, ConnEvent.WatchdogTimeout -> HandleResult.Handled(Offline)
         ConnEvent.Heartbeat -> {
             // Superstate-only reaction: stay in current leaf; declare **domain** heartbeat.
+            // Absolute watchdog: do NOT re-arm here.
             HandleResult.Handled(currentLeaf, listOf(ConnectionEffect.IncHeartbeat))
         }
         else -> HandleResult.Unhandled
@@ -321,30 +357,40 @@ fun connectionStep(
  * so production paths get offline entry audit. Export never constructs this class —
  * it uses pure [connectionStep] only.
  *
- * Dual sinks: [crossCutting] env (audit/metrics/trace) + [port] (domain, including heartbeats).
+ * Dual sinks: [crossCutting] env (audit/metrics/trace) + domain multi-port
+ * ([port] session + [timers] scheduling) — one domain list, two ports (not a third outcome field).
+ * No automatic drain on Connection in v1.
  */
 class ConnectionContext(
     initial: ConnState = Offline,
     val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: ConnectionPort = ConnectionPort(),
+    val clock: VirtualClock = VirtualClock(),
+    val timers: TimerPort = TimerPort(clock),
     val machineName: String = "Connection",
 ) {
     var current: ConnState = initial
         private set
+
+    /** Multi-port domain apply — closes over [port] + [timers]; list order is inline. */
+    private fun applyDomain(domain: List<ConnectionEffect>, ignored: ConnectionPort) {
+        applyDomainConnection(domain, port, timers)
+    }
 
     init {
         val effects = pathFromRoot(initial) { it.parent }
             .fold(FragmentedStepEffects<ConnectionEffect>()) { acc, s ->
                 acc + s.enterEffects(machineName)
             }
-        applyFragments(effects, crossCutting, port, ::applyDomainConnection)
+        // Offline enter has no timer; still use multi-port apply for uniformity
+        applyFragments(effects, crossCutting, port, ::applyDomain)
     }
 
     fun handle(event: ConnEvent): Boolean {
         val fromLeaf = current
         // Hierarchical recipe: apply fragments first (accept and refuse), then assign if leaf changes.
         val step = connectionStep(fromLeaf, event, machineName)
-        applyFragments(step.effects, crossCutting, port, ::applyDomainConnection)
+        applyFragments(step.effects, crossCutting, port, ::applyDomain)
         return when (step) {
             is HierarchyStep.Handled -> {
                 if (step.next !== fromLeaf) {

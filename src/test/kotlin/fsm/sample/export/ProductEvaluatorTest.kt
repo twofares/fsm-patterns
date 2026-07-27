@@ -215,6 +215,7 @@ class ProductEvaluatorTest {
             ConnEvent.StartTransfer,
             ConnEvent.FinishTransfer,
             ConnEvent.Heartbeat,
+            ConnEvent.WatchdogTimeout,
         )
         for (leaf in leaves) {
             for (event in events) {
@@ -234,8 +235,27 @@ class ProductEvaluatorTest {
 
         val connect = table.rows.single { it.from == Offline.name && it.event == ConnEvent.Connect.label() }
         assertTrue(connect.effects.contains("OpenSession"))
+        assertTrue(
+            connect.effects.any { it.startsWith("Timer.Arm(") },
+            "Connect path must export Timer.Arm; effects=${connect.effects}",
+        )
         assertTrue(connect.effects.any { it.startsWith("Audit.LogEntry") && it.contains("Online") })
         assertTrue(connect.effects.any { it.contains("connection.session.open") || it.contains("Metric") })
+
+        val disconnect = table.rows.single { it.from == Idle.name && it.event == ConnEvent.Disconnect.label() }
+        assertTrue(
+            disconnect.effects.any { it.startsWith("Timer.Cancel(") },
+            "Disconnect path must export Timer.Cancel; effects=${disconnect.effects}",
+        )
+        assertTrue(disconnect.effects.contains("CloseSession"))
+
+        val watchdog = table.rows.single {
+            it.from == Idle.name && it.event == ConnEvent.WatchdogTimeout.label()
+        }
+        assertEquals(Offline.name, watchdog.to)
+        assertEquals(TransitionKind.ACCEPTED, watchdog.kind)
+        assertTrue(watchdog.effects.contains("CloseSession"))
+        assertTrue(watchdog.effects.any { it.startsWith("Timer.Cancel(") })
 
         val start = table.rows.single {
             it.from == Idle.name && it.event == ConnEvent.StartTransfer.label()

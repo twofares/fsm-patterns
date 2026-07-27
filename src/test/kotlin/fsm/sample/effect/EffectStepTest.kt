@@ -20,6 +20,8 @@ import fsm.sample.flat.applyDomainLight
 import fsm.sample.flat.domainEnterDwellColor
 import fsm.sample.flat.step
 import fsm.sample.flat.transition
+import fsm.sample.gof.CONNECTION_WATCHDOG_ID
+import fsm.sample.gof.CONNECTION_WATCHDOG_MS
 import fsm.sample.machine.TimerPort
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnState
@@ -206,11 +208,19 @@ class EffectStepTest {
     }
 
     @Test
-    fun `planTransition Offline to Idle includes OpenSession and session metrics`() {
+    fun `planTransition Offline to Idle includes OpenSession Timer Arm and session metrics`() {
         val planned = planConnectionTransition(Offline, Idle, ConnEvent.Connect)
         assertTrue(planned.domain.contains(ConnectionEffect.OpenSession))
+        assertTrue(
+            planned.domain.any {
+                it is ConnectionEffect.Timer &&
+                    it.intent is TimerIntent.Arm &&
+                    it.intent.id == CONNECTION_WATCHDOG_ID
+            },
+        )
         assertTrue(planned.crossCutting.any { it is CrossCuttingEffect.Metric.Inc && it.name == "connection.session.open" })
         assertTrue(planned.exportLabels().contains("OpenSession"))
+        assertTrue(planned.exportLabels().any { it.startsWith("Timer.Arm($CONNECTION_WATCHDOG_ID,") })
         assertTrue(planned.exportLabels().any { it.startsWith("Audit.LogEntry") })
     }
 
@@ -274,10 +284,25 @@ class EffectStepTest {
         )
         // Idle enter must come after OpenSession (fragment pairing, not flatten-all-CC).
         assertTrue(idleEntry > openSession, "LogEntry(Idle) must follow OpenSession; labels=$labels")
-        // Same fragment: OpenSession is first domain after Online's CC block.
+        // Same fragment: OpenSession then Timer.Arm after Online's CC block.
         val onlineFrag = planned.fragments.single { ConnectionEffect.OpenSession in it.domain }
         assertTrue(onlineFrag.crossCutting.any { it.exportLabel() == "Audit.LogEntry(Online)" })
-        assertEquals(listOf(ConnectionEffect.OpenSession), onlineFrag.domain)
+        assertEquals(
+            listOf(
+                ConnectionEffect.OpenSession,
+                ConnectionEffect.Timer(
+                    TimerIntent.Arm(
+                        id = CONNECTION_WATCHDOG_ID,
+                        delayMs = CONNECTION_WATCHDOG_MS,
+                        eventKey = ConnEvent.WatchdogTimeout.label(),
+                    ),
+                ),
+            ),
+            onlineFrag.domain,
+        )
+        val armIdx = labels.indexOfFirst { it.startsWith("Timer.Arm($CONNECTION_WATCHDOG_ID,") }
+        assertTrue(armIdx > openSession, "Timer.Arm must follow OpenSession; labels=$labels")
+        assertTrue(idleEntry > armIdx, "LogEntry(Idle) must follow Timer.Arm; labels=$labels")
     }
 
     @Test

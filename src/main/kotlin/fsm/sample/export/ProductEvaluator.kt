@@ -246,6 +246,7 @@ fun evaluateConnectionHierarchy(): TransitionTable = productEvaluateHierarchy(
         ConnEvent.StartTransfer,
         ConnEvent.FinishTransfer,
         ConnEvent.Heartbeat,
+        ConnEvent.WatchdogTimeout,
     ),
     stateLabel = { it.name },
     eventLabel = { it.label() },
