@@ -9,8 +9,8 @@ authoring guide. For how the code works today, start at the
 
 ## What this project is
 
-A **didactic Kotlin sample** under `~/Scratch/fsm` that shows several classical
-state-machine disciplines as **ordinary application code**:
+A **didactic Kotlin sample** under `~/TwoFares/Workspaces/fsm` that shows several
+classical state-machine disciplines as **ordinary application code**:
 
 - no third-party FSM, statechart, or SCXML library
 - runtime dependencies limited to the Kotlin stdlib (plus JUnit for tests)
@@ -28,7 +28,7 @@ reference implementation of any one formal model.
 |--|--|
 | **Started** | 2026-07-24 (`Initial snapshot`) |
 | **Author (git)** | Brian Stiles (`bstiles@bstiles.net`) |
-| **Location** | Personal Scratch tree: FSM / statechart / CSP pattern exploration |
+| **Location** | `~/TwoFares/Workspaces/fsm` (moved from `~/Scratch/fsm` after the dual-sink / docs arc) |
 | **Language / build** | Kotlin 2.1.x, Gradle, JDK 17–21 (workspace often pins Corretto 21) |
 
 ### Intent from day one
@@ -195,7 +195,7 @@ to this repo’s dual-sink model (see [timers-and-automatic.md](timers-and-autom
 | Fork of an open-source FSM library? | **No.** Gradle intentionally excludes FSM/statechart engines. |
 | Generated from SCXML/UML models? | **No.** Hand-written Kotlin vignettes and shared helpers. |
 | Port of a specific public sample repo? | **No known upstream.** Structures are **common teaching shapes**, rewritten here. |
-| Who owns the code? | Authored in this Scratch workspace (git history). Treat as the project’s own sample unless a later LICENSE says otherwise. |
+| Who owns the code? | Authored in this workspace (git history; began under Scratch). Treat as the project’s own sample unless a later LICENSE says otherwise. |
 
 ### Why these vignette stories?
 
