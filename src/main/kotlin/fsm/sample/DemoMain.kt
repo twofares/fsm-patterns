@@ -5,6 +5,7 @@ import fsm.sample.csp.FileProtocol
 import fsm.sample.csp.FileState
 import fsm.sample.csp.exportLabels
 import fsm.sample.effect.exportLabels
+import fsm.sample.flat.DWELL_GREEN_MS
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightState
 import fsm.sample.flat.TrafficLight
@@ -39,7 +40,7 @@ fun main() {
     val light = TrafficLight()
     light.handle(LightEvent.Tick)
     line("after Tick: state=${light.current.label()} pending=${light.timers.pending()}")
-    light.clock.advance(25_000L)
+    light.clock.advance(DWELL_GREEN_MS)
     val fired = light.fireDueTimeouts()
     line("after advance+fireDue: fired=$fired state=${light.current.label()} pending=${light.timers.pending()}")
     light.handle(LightEvent.Emergency)

@@ -3,7 +3,6 @@ package fsm.sample.flat
 import fsm.sample.effect.CrossCuttingEnv
 import fsm.sample.effect.TimerIntent
 import fsm.sample.logging.RecordKind
-import fsm.sample.machine.TimerPort
 import fsm.sample.machine.VirtualClock
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -70,22 +69,25 @@ class TrafficLightTest {
     }
 
     @Test
-    fun `pure step does not mutate TimerPort`() {
-        val timers = TimerPort(VirtualClock())
+    fun `pure step domain declares Cancel then Arm then DriveLamp`() {
         val pure = step(LightState.Red, LightEvent.Tick)
-        assertTrue(timers.pending().isEmpty(), "pure step must not touch TimerPort")
-        assertEquals(3, pure.domain.size)
-        assertTrue(pure.domain[0] is LightEffect.Timer)
-        assertTrue((pure.domain[0] as LightEffect.Timer).intent is TimerIntent.Cancel)
-        assertTrue(pure.domain[1] is LightEffect.Timer)
-        assertTrue((pure.domain[1] as LightEffect.Timer).intent is TimerIntent.Arm)
-        assertEquals(LightEffect.DriveLamp("Green"), pure.domain[2])
+        assertEquals(domainEnterDwellColor(LightState.Green), pure.domain)
+        assertEquals(
+            listOf(
+                LightEffect.Timer(TimerIntent.Cancel(LIGHT_DWELL_ID)),
+                LightEffect.Timer(
+                    TimerIntent.Arm(LIGHT_DWELL_ID, DWELL_GREEN_MS, LightEvent.DwellElapsed.label()),
+                ),
+                LightEffect.DriveLamp("Green"),
+            ),
+            pure.domain,
+        )
     }
 
     @Test
     fun `Tick arms Green dwell then advance pollDue handle advances color`() {
         val clock = VirtualClock()
-        val light = TrafficLight(clock = clock, timers = TimerPort(clock))
+        val light = TrafficLight(clock = clock)
 
         light.handle(LightEvent.Tick)
         assertEquals(LightState.Green, light.current)
@@ -111,7 +113,7 @@ class TrafficLightTest {
     @Test
     fun `fireDueTimeouts maps DwellElapsed and advances color`() {
         val clock = VirtualClock()
-        val light = TrafficLight(clock = clock, timers = TimerPort(clock))
+        val light = TrafficLight(clock = clock)
         light.handle(LightEvent.Tick) // Red → Green, arm green dwell
         clock.advance(DWELL_GREEN_MS)
         val fired = light.fireDueTimeouts()
@@ -122,7 +124,7 @@ class TrafficLightTest {
     @Test
     fun `cancel then re-arm on transition — Green dwell replaced by Red on Emergency`() {
         val clock = VirtualClock()
-        val light = TrafficLight(clock = clock, timers = TimerPort(clock))
+        val light = TrafficLight(clock = clock)
         light.handle(LightEvent.Tick) // → Green, arm 25s
         assertEquals(1, light.timers.pending().size)
         assertEquals(clock.nowMs() + DWELL_GREEN_MS, light.timers.pending()[0].dueAtMs)

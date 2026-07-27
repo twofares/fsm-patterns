@@ -101,15 +101,21 @@ fun step(
  * via [applyAccepted] (assign → CC → domain). Domain lambda closes over [timers].
  *
  * No init arm for Red dwell (K16): [timers] starts empty until first engagement.
+ *
+ * **Clock / timers coupling:** inject only [clock]. [timers] is always
+ * `TimerPort(clock)` so `clock.advance` and `timers.pollDue` / [fireDueTimeouts]
+ * stay in sync. Do not construct a separate [TimerPort] with a different clock.
  */
 class TrafficLight(
     initial: LightState = LightState.Red,
     val crossCutting: CrossCuttingEnv = CrossCuttingEnv(),
     val port: LightPort = LightPort(),
     val clock: VirtualClock = VirtualClock(),
-    val timers: TimerPort = TimerPort(clock),
     private val machineName: String = "TrafficLight",
 ) {
+    /** Scheduler for this machine — always backed by [clock] (single injection point). */
+    val timers: TimerPort = TimerPort(clock)
+
     var current: LightState = initial
         private set
 

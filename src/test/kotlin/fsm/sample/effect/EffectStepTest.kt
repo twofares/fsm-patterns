@@ -9,6 +9,7 @@ import fsm.sample.csp.OfferResult
 import fsm.sample.csp.applyDomainFile
 import fsm.sample.effect.TimerIntent
 import fsm.sample.flat.DWELL_GREEN_MS
+import fsm.sample.flat.DWELL_RED_MS
 import fsm.sample.flat.LIGHT_DWELL_ID
 import fsm.sample.flat.LightEvent
 import fsm.sample.flat.LightEffect
@@ -76,7 +77,7 @@ private fun planConnectionTransition(
 class EffectStepTest {
 
     @Test
-    fun `TrafficLight pure step declares multi-family crossCutting and DriveLamp`() {
+    fun `TrafficLight pure step declares multi-family crossCutting and Cancel Arm DriveLamp`() {
         val result = step(LightState.Red, LightEvent.Tick)
         assertEquals(LightState.Green, result.next)
         assertEquals(transition(LightState.Red, LightEvent.Tick), result.next)
@@ -97,10 +98,23 @@ class EffectStepTest {
     }
 
     @Test
-    fun `TrafficLight Emergency adds Trace family distinct from Metric`() {
+    fun `TrafficLight Emergency adds Trace family and Cancel Arm DriveLamp for Red`() {
         val result = step(LightState.Green, LightEvent.Emergency)
+        assertEquals(LightState.Red, result.next)
         assertTrue(result.crossCutting.any { it is CrossCuttingEffect.Trace.Span })
         assertTrue(result.crossCutting.none { it is CrossCuttingEffect.Metric.Inc && it.name == "light.ticks" })
+        // PR 3 lock-in: Emergency still → Red with Cancel+Arm(Red)+DriveLamp (not Flash yet).
+        assertEquals(domainEnterDwellColor(LightState.Red), result.domain)
+        assertEquals(
+            listOf(
+                LightEffect.Timer(TimerIntent.Cancel(LIGHT_DWELL_ID)),
+                LightEffect.Timer(
+                    TimerIntent.Arm(LIGHT_DWELL_ID, DWELL_RED_MS, LightEvent.DwellElapsed.label()),
+                ),
+                LightEffect.DriveLamp("Red"),
+            ),
+            result.domain,
+        )
     }
 
     @Test
