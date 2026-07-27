@@ -10,25 +10,40 @@ Stdlib only — no FSM/statechart engines.
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Red | Tick | Green | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), DriveLamp(Green) |  |
-| Red | Emergency | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,forced Red), DriveLamp(Red) |  |
-| Green | Tick | Yellow | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), DriveLamp(Yellow) |  |
-| Green | Emergency | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,forced Red), DriveLamp(Red) |  |
-| Yellow | Tick | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), DriveLamp(Red) |  |
-| Yellow | Emergency | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,forced Red), DriveLamp(Red) |  |
+| Red | Tick | Green | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), Timer.Arm(light.dwell,25000ms,DwellElapsed), DriveLamp(Green) |  |
+| Red | Emergency | Flash | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,emergency interrupt → Flash), Timer.Cancel(light.dwell), DriveLamp(Flash) |  |
+| Red | DwellElapsed | Green | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), Timer.Arm(light.dwell,25000ms,DwellElapsed), DriveLamp(Green) |  |
+| Green | Tick | Yellow | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), Timer.Arm(light.dwell,5000ms,DwellElapsed), DriveLamp(Yellow) |  |
+| Green | Emergency | Flash | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,emergency interrupt → Flash), Timer.Cancel(light.dwell), DriveLamp(Flash) |  |
+| Green | DwellElapsed | Yellow | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), Timer.Arm(light.dwell,5000ms,DwellElapsed), DriveLamp(Yellow) |  |
+| Yellow | Tick | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), Timer.Arm(light.dwell,30000ms,DwellElapsed), DriveLamp(Red) |  |
+| Yellow | Emergency | Flash | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,emergency interrupt → Flash), Timer.Cancel(light.dwell), DriveLamp(Flash) |  |
+| Yellow | DwellElapsed | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), Timer.Arm(light.dwell,30000ms,DwellElapsed), DriveLamp(Red) |  |
+| Flash | Tick | Flash | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), DriveLamp(Flash) |  |
+| Flash | Emergency | Flash | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Trace.Span(light.emergency,emergency interrupt → Flash), Timer.Cancel(light.dwell), DriveLamp(Flash) |  |
+| Flash | DwellElapsed | Flash | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.ticks), Timer.Cancel(light.dwell), DriveLamp(Flash) |  |
+| Flash | ε | Red | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(light.completion), Timer.Cancel(light.dwell), Timer.Arm(light.dwell,30000ms,DwellElapsed), DriveLamp(Red) | eventless |
 
 ```mermaid
 stateDiagram-v2
   %% TrafficLight (flat product edges)
   Red
   Green
+  Flash
   Yellow
   Red --> Green : Tick
-  Red --> Red : Emergency
+  Red --> Flash : Emergency
+  Red --> Green : DwellElapsed
   Green --> Yellow : Tick
-  Green --> Red : Emergency
+  Green --> Flash : Emergency
+  Green --> Yellow : DwellElapsed
   Yellow --> Red : Tick
-  Yellow --> Red : Emergency
+  Yellow --> Flash : Emergency
+  Yellow --> Red : DwellElapsed
+  Flash --> Flash : Tick
+  Flash --> Flash : Emergency
+  Flash --> Flash : DwellElapsed
+  Flash --> Red : ε
 ```
 
 ## FileProtocol
@@ -60,21 +75,24 @@ stateDiagram-v2
 
 | From | Event | To | Kind | Effects | Note |
 | --- | --- | --- | --- | --- | --- |
-| Offline | Connect | Idle | ACCEPTED | Audit.LogExit(Offline), Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Online), Metric.Inc(connection.session.open), Trace.Span(connection.session,open), OpenSession, Audit.LogEntry(Idle) |  |
+| Offline | Connect | Idle | ACCEPTED | Audit.LogExit(Offline), Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Online), Metric.Inc(connection.session.open), Trace.Span(connection.session,open), OpenSession, Timer.Arm(connection.online.watchdog,30000ms,WatchdogTimeout), Audit.LogEntry(Idle) |  |
 | Offline | Disconnect | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Disconnect) | no state in hierarchy accepted event |
 | Offline | StartTransfer | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,StartTransfer) | no state in hierarchy accepted event |
 | Offline | FinishTransfer | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,FinishTransfer) | no state in hierarchy accepted event |
 | Offline | Heartbeat | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Heartbeat) | no state in hierarchy accepted event |
+| Offline | WatchdogTimeout | Offline | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,WatchdogTimeout) | no state in hierarchy accepted event |
 | Idle | Connect | Idle | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Connect) | no state in hierarchy accepted event |
-| Idle | Disconnect | Offline | ACCEPTED | Audit.LogExit(Idle), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
+| Idle | Disconnect | Offline | ACCEPTED | Audit.LogExit(Idle), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), Timer.Cancel(connection.online.watchdog), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
 | Idle | StartTransfer | Transferring | ACCEPTED | Audit.LogExit(Idle), Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Transferring) |  |
 | Idle | FinishTransfer | Idle | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,FinishTransfer) | no state in hierarchy accepted event |
 | Idle | Heartbeat | Idle | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(connection.heartbeat), IncHeartbeat |  |
+| Idle | WatchdogTimeout | Offline | ACCEPTED | Audit.LogExit(Idle), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), Timer.Cancel(connection.online.watchdog), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
 | Transferring | Connect | Transferring | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,Connect) | no state in hierarchy accepted event |
-| Transferring | Disconnect | Offline | ACCEPTED | Audit.LogExit(Transferring), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
+| Transferring | Disconnect | Offline | ACCEPTED | Audit.LogExit(Transferring), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), Timer.Cancel(connection.online.watchdog), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
 | Transferring | StartTransfer | Transferring | REFUSED | Audit.LogRefusal, Metric.Inc(connection.refuse), Trace.Span(connection.refuse,StartTransfer) | no state in hierarchy accepted event |
 | Transferring | FinishTransfer | Idle | ACCEPTED | Audit.LogExit(Transferring), Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Idle) |  |
 | Transferring | Heartbeat | Transferring | ACCEPTED | Audit.LogTransition, Metric.Inc(fsm.transitions), Metric.Inc(connection.heartbeat), IncHeartbeat |  |
+| Transferring | WatchdogTimeout | Offline | ACCEPTED | Audit.LogExit(Transferring), Audit.LogExit(Online), Metric.Inc(connection.session.close), Trace.Span(connection.session,close), Timer.Cancel(connection.online.watchdog), CloseSession, Audit.LogTransition, Metric.Inc(fsm.transitions), Audit.LogEntry(Offline) |  |
 
 ```mermaid
 stateDiagram-v2
@@ -88,9 +106,11 @@ stateDiagram-v2
   Idle --> Offline : Disconnect
   Idle --> Transferring : StartTransfer
   Idle --> Idle : Heartbeat
+  Idle --> Offline : WatchdogTimeout
   Transferring --> Offline : Disconnect
   Transferring --> Idle : FinishTransfer
   Transferring --> Transferring : Heartbeat
+  Transferring --> Offline : WatchdogTimeout
   %% composites: Online
 ```
 

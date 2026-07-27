@@ -4,9 +4,9 @@
 |-------|--------|
 | **Author** | TBD (sample design; no single owner assigned) |
 | **Date** | 2026-07-27 |
-| **Status** | Draft (revision 2 — review issues addressed) |
+| **Status** | Accepted (PRs 1–5 shipped; this doc is the authoring guide) |
 | **Workspace** | `/Users/bstiles/Scratch/fsm` |
-| **Branch tip** | `execute-plan/d7ffdab0-stack` (authoring surfaces hardened; dual-sink pure step + boundary apply) |
+| **Branch tip** | timers + automatic drain + TrafficLight Flash/dwell + Connection watchdog |
 | **Audience** | Senior engineers and coding agents extending this sample |
 | **Related** | [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) — **do not rewrite**; this design **extends** shared surfaces |
 

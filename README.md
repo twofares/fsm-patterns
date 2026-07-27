@@ -30,8 +30,9 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 | `src/main/kotlin/fsm/sample/machine/` | Boundary apply + hierarchy structure (not an engine) |
 | `src/main/kotlin/fsm/sample/logging/` | Transition audit log (one cross-cutting sink) |
 | `src/main/kotlin/fsm/sample/export/` | Product evaluation → Markdown + Mermaid |
-| `DemoMain.kt` / `ExportMain.kt` | Dual-surface demos |
+| `DemoMain.kt` / `ExportMain.kt` | Dual-surface demos (`VirtualClock` dwell fire in DemoMain) |
 | `docs/machine-authoring-surfaces.md` | Full design / agent checklist (PR surfaces) |
+| `docs/timers-and-automatic-transitions.md` | Timers + automatic (ε) authoring guide — extends dual-sink |
 
 ## Machine kinds (matrix)
 
@@ -41,12 +42,15 @@ gradle runExport   # product-evaluated tables + Mermaid diagrams
 | **CSP / partial** | FileProtocol | `stepOffer(S,E) → OfferOutcome` | `applyOffer` | `productEvaluateOffer` |
 | **Hierarchical** | Connection | `connectionStep` → `HierarchyStep` (dispatch + `declaredEffects`) | `applyFragments` then assign | `productEvaluateHierarchy` |
 | **Orthogonal** | DoorSystem | Region `step` → `StepResult` (+ container pure guards) | Region: `applyAccepted`; container refuse is CC-only | Compose region tables (`exportDoorSystem`) |
+| **Timers (domain)** | TrafficLight dwell; Connection Online watchdog | Domain case wrapping `TimerIntent` (Arm/Cancel) | Multi-port `applyDomain*` + `TimerPort`/`VirtualClock` (inline list order) | Timer.* labels on product rows (no clocks in export) |
+| **Automatic (ε)** | TrafficLight Flash→Red | `automaticStep(S) → StepResult?` | `drainAutomatic` after external apply (throw on bound/cycle) | `productEvaluateAutomatic` (+ full Cartesian for intermediate states) |
 
 **Outcome choice (critical):**
 
 - **Total** machines (every event accepted from every state) → `StepResult` + `applyAccepted`.
 - **Refuse-capable** machines (menus, guards, partial alphabets) → `OfferOutcome` (`Accepted` may carry domain; `Refused` has **no** domain field) + `applyOffer`.
 - **Hierarchy** keeps vignette-local `HandleResult` / `declaredEffects`; shared structure is fragments + LCA helpers — **not** flattened into one `StepResult`.
+- **Timers / automatic** are **not** a third outcome kind: same dual-sink `StepResult` / fragments; multi-port fan-out lives in vignette `applyDomain*` (one domain list → N ports).
 
 ## Two boundary families (do not unify)
 
@@ -73,8 +77,12 @@ Hierarchy:      pure plan → for each fragment (CC → domain) → assign leaf
 | List recording bag | [`machine/RecordingPort.kt`](src/main/kotlin/fsm/sample/machine/RecordingPort.kt) — tiny open list sink; list-shaped vignette ports **subclass** it (not private bag + pass-through) |
 | Fragment shapes | [`machine/FragmentedEffects.kt`](src/main/kotlin/fsm/sample/machine/FragmentedEffects.kt) |
 | Pure outcomes | [`effect/StepResult.kt`](src/main/kotlin/fsm/sample/effect/StepResult.kt), [`effect/OfferOutcome.kt`](src/main/kotlin/fsm/sample/effect/OfferOutcome.kt), [`effect/HierarchyStep.kt`](src/main/kotlin/fsm/sample/effect/HierarchyStep.kt) |
+| Timer intents | [`effect/TimerIntent.kt`](src/main/kotlin/fsm/sample/effect/TimerIntent.kt) — pure `Arm`/`Cancel`; vignette domain wraps them |
+| Timer boundary | [`machine/TimerPort.kt`](src/main/kotlin/fsm/sample/machine/TimerPort.kt) — `VirtualClock`, `TimerPort.apply` / `pollDue` / `pending` |
+| Automatic drain | [`machine/Automatic.kt`](src/main/kotlin/fsm/sample/machine/Automatic.kt) — `drainAutomatic` (bound + cycle throw) |
 | Product export | [`export/ProductEvaluator.kt`](src/main/kotlin/fsm/sample/export/ProductEvaluator.kt), [`export/SampleExports.kt`](src/main/kotlin/fsm/sample/export/SampleExports.kt) |
 | Full design doc | [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) |
+| Timers + automatic guide | [`docs/timers-and-automatic-transitions.md`](docs/timers-and-automatic-transitions.md) |
 | Shared dual-sink test helpers | [`src/test/kotlin/fsm/sample/testsupport/`](src/test/kotlin/fsm/sample/testsupport/) |
 
 ## How to add a machine
@@ -116,6 +124,18 @@ Hierarchy:      pure plan → for each fragment (CC → domain) → assign leaf
 1. Regions use the total-flat recipe + `applyAccepted`.
 2. Container pure guards use `refuseCrossCutting` then **`applyRefusal`** (CC only; no domain on refuse).
 3. Share one `CrossCuttingEnv` + domain port across regions when teaching process-wide CC.
+
+### Timers + automatic (copy TrafficLight / Connection)
+
+Full recipe: [`docs/timers-and-automatic-transitions.md`](docs/timers-and-automatic-transitions.md) (Appendix A).
+
+1. Sealed timeout event; domain case wrapping `TimerIntent`; **`Arm(..., eventKey = TimeoutEvent.label())`** only.
+2. Pure step **declares** Cancel/Arm; never touches `TimerPort` or clocks.
+3. Boundary multi-port: `applyDomain*(domain, port, timers)` inline in domain list order — **not** a third outcome field.
+4. Client/test: `clock.advance` → `pollDue` / `fireDueTimeouts` → mapper → `handle` (no `Thread.sleep`).
+5. Automatic: pure `automaticStep(S) → StepResult?`; `handle` applies external then `drainAutomatic` (throw on bound/cycle).
+6. Export: full Cartesian (incl. intermediate states like Flash) + `productEvaluateAutomatic`; never run clocks in evaluators.
+7. Hierarchy cancel-on-exit: Arm in enter domain; **Cancel first** in exit domain for the owning superstate (LCA via `planTransition`).
 
 ### Domain ports (vignette-local)
 
@@ -191,9 +211,9 @@ OfferOutcome.Accepted(next, crossCutting, domain) | Refused(reason, next, crossC
 
 | Machine | Example cross-cutting | Domain |
 |---------|----------------------|--------|
-| TrafficLight | Audit transition + `Metric.Inc(fsm.transitions)` + `Metric.Inc(light.ticks)` / `Trace` on Emergency | `DriveLamp` |
+| TrafficLight | Audit transition + `Metric.Inc(fsm.transitions)` + `Metric.Inc(light.ticks)` / `Trace` on Emergency; `light.completion` on ε | `DriveLamp` + `Timer` (dwell Arm/Cancel) |
 | FileProtocol | Accept: audit + metrics; Refuse: audit + `csp.refuse` metric + **Trace** | Open/Read/Close handle (accept only) |
-| Connection | Session open/close: audit + metrics + **Trace**; refuse: metric + trace | `OpenSession` / `CloseSession` / `IncHeartbeat` |
+| Connection | Session open/close: audit + metrics + **Trace**; refuse: metric + trace | `OpenSession` / `CloseSession` / `IncHeartbeat` + `Timer` (Online watchdog) |
 | Door | Region metrics; refuse: audit + `door.refuse` + **Trace.Span(door.policy)** | Strike / deadbolt / chime |
 
 Type separation: domain ADTs cannot hold cross-cutting cases; `List<LightEffect>` cannot hold `IncHeartbeat`.
@@ -213,6 +233,11 @@ Hierarchical Connection applies **fragments** (cross-cutting then domain per LCA
 | Explicit sealed domain lists for product eval | Reflection over subclasses |
 | Export labels from pure declarations | Export from interpreter side effects |
 | Hierarchy: apply fragments, assign **after** | Flatten all CC then all domain (breaks Online enter pairing) |
+| Timers: declare `TimerIntent` in domain only; `Arm(..., eventKey = Event.label())` + pure mapper | Clocks / `TimerPort` / `Thread.sleep` in pure step |
+| Multi-port: one domain list fans out in `applyDomain*` (inline order) | Third `StepResult` / outcome field for timers (`StepResult.timers`, `CrossCuttingEffect.Timer`) |
+| Cancel dwell/watchdog on every abort path (**Emergency → Flash**, Online exit) | Leave dangling armed timers after Emergency / Disconnect |
+| Tests & demos: `VirtualClock.advance` + `pollDue` / `fireDueTimeouts` | `Thread.sleep` to wait for timeouts |
+| Automatic: pure `automaticStep` + `drainAutomatic` after external apply | Public `Completion` event unless truly external; soft refuse on bound/cycle |
 
 ## Export tables
 
@@ -221,7 +246,9 @@ gradle -q runExport > export.md
 ```
 
 Markdown tables include an **Effects** column (comma-joined labels such as
-`Audit.LogTransition`, `Metric.Inc(fsm.transitions)`, `Trace.Span(...)`, `DriveLamp(Green)`).
+`Audit.LogTransition`, `Metric.Inc(fsm.transitions)`, `Trace.Span(...)`,
+`DriveLamp(Green)`, `Timer.Arm(...)`, `Timer.Cancel(...)`).
 
 Every non-trivial type and path is documented with **PURPOSE** comments in source.
-See also [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) for the full shared-surfaces design.
+See also [`docs/machine-authoring-surfaces.md`](docs/machine-authoring-surfaces.md) for the full shared-surfaces design,
+and [`docs/timers-and-automatic-transitions.md`](docs/timers-and-automatic-transitions.md) for timers and automatic (ε) transitions.
