@@ -1,8 +1,8 @@
 # Authoring guide — as-built dual-sink machines
 
 Detailed how-to for extending this sample. High-level orientation lives in the
-[README](../README.md). Timers and automatic transitions:
-[timers-and-automatic.md](timers-and-automatic.md).
+[README](../README.md). Term definitions: [glossary.md](glossary.md).
+Timers and automatic transitions: [timers-and-automatic.md](timers-and-automatic.md).
 
 ## Shared surfaces (as-built)
 
@@ -27,8 +27,10 @@ Call hierarchy helpers from `machine/` **directly**. Do not re-export thin publi
 ## Checklist — any machine
 
 1. Sealed **state** + **event** with `label()`.
-2. Machine-local **domain ADT** (if any I/O) with `exportLabel()` — never nest `CrossCuttingEffect`.
-3. Domain **port** + `applyDomainX` — only place that mutates domain hardware/session I/O.
+2. Machine-local **domain type** (if any I/O): a sealed class/interface of intents
+   with `exportLabel()` — never nest `CrossCuttingEffect` inside it.
+3. Domain **port** + `applyDomainX` — only place that performs those intents
+   (hardware, files, sessions, …).
 4. **Pure** step surface matching kind (below). Pure code must not touch env / port / log / clocks.
 5. **Boundary** only via the kind-correct shared `apply*` helper.
 6. Cross-cutting via `acceptTransitionCrossCutting` / `refuseCrossCutting` **with machine-specific extras** / `traceDetail`.
@@ -38,6 +40,12 @@ Call hierarchy helpers from `machine/` **directly**. Do not re-export thin publi
 ---
 
 ## Total flat (copy TrafficLight)
+
+**Engagement:** every known event is accepted (staying put counts). No refuse
+branch—use [partial](#refuse-capable--csp-copy-fileprotocol) when some operations
+must be declined. Teaching contrast:
+[README — Total vs partial](../README.md#total-vs-partial-the-main-fork).
+Background words: [glossary](glossary.md#background-terms).
 
 **Files:** `flat/TrafficLight.kt`, `flat/LightEffect.kt`
 
@@ -54,6 +62,14 @@ pure step → assign next → CrossCuttingInterpreter → applyDomain
 ---
 
 ## Refuse-capable / CSP (copy FileProtocol)
+
+**Engagement:** some events are refused—like a **menu** of legal operations, or
+a small **protocol** of allowed moves (open then read/close, not open twice).
+Domain I/O only on `Accepted`; `Refused` has no domain field so declined paths
+cannot declare hardware/file work. Prefer this over total when illegal ops must
+not touch ports. Teaching contrast:
+[README — Total vs partial](../README.md#total-vs-partial-the-main-fork).
+Background words: [glossary](glossary.md#background-terms).
 
 **Files:** `csp/FileProtocol.kt`, `csp/FileEffect.kt`
 
@@ -174,6 +190,7 @@ refuseCrossCutting(
 ## See also
 
 - [README](../README.md) — teaching overview  
+- [glossary.md](glossary.md) — as-built terms  
 - [timers-and-automatic.md](timers-and-automatic.md) — timers + ε  
 - [machine-examples-visual.html](machine-examples-visual.html) — structural diagrams  
 - [export.md](../export.md) — generated tables  

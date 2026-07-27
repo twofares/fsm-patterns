@@ -1,7 +1,8 @@
 # Timers and automatic (ε) transitions — as-built how-to
 
 How to use delayed events and eventless completion in this sample.  
-Overview: [README](../README.md). General authoring: [authoring-guide.md](authoring-guide.md).
+Overview: [README](../README.md). Terms: [glossary.md](glossary.md).
+General authoring: [authoring-guide.md](authoring-guide.md).
 
 Timers and automatic transitions **extend** dual-sink pure steps. They do **not**
 add a third list on `StepResult` / `OfferOutcome` / `HierarchyStep`, and they are
@@ -163,5 +164,6 @@ Full SCXML RTC interpreter, shallow/deep history, deferred-event queues, orthogo
 ## See also
 
 - [README](../README.md)  
+- [glossary.md](glossary.md)  
 - [authoring-guide.md](authoring-guide.md)  
 - Sources: `flat/TrafficLight.kt`, `gof/ConnectionMachine.kt`, `machine/TimerPort.kt`, `machine/Automatic.kt`  
