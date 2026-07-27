@@ -359,6 +359,7 @@ Full prose comparison: [README — Total vs partial](../README.md#total-vs-parti
 ## See also
 
 - [README](../README.md) — kinds, dual-sink rules, package map  
+- [origins-and-sources.md](origins-and-sources.md) — project provenance and concept sources  
 - [authoring-guide.md](authoring-guide.md) — checklist and recipes  
 - [timers-and-automatic.md](timers-and-automatic.md) — dwell, watchdog, Flash ε  
 - [machine-examples-visual.html](machine-examples-visual.html) — structural diagrams  

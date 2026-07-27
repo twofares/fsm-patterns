@@ -36,6 +36,7 @@ gradle -q runExport > export.md   # product tables + Mermaid
 |-----|------|
 | **This README** | High-level teaching overview: kinds, dual-sink rules, package map |
 | [`docs/glossary.md`](docs/glossary.md) | Plain-language + as-built terms (menu, protocol, ADT, dual-sink, kinds, …) |
+| [`docs/origins-and-sources.md`](docs/origins-and-sources.md) | Why the repo exists; concept lineage (Harel, CSP, GoF, …) and code provenance |
 | [`docs/authoring-guide.md`](docs/authoring-guide.md) | Detailed how-to: add a machine, boundaries, ports, export registration |
 | [`docs/timers-and-automatic.md`](docs/timers-and-automatic.md) | Detailed how-to: `TimerIntent`, `TimerPort`, `automaticStep` / `drainAutomatic` |
 | [`export.md`](export.md) | **Generated** product tables + Mermaid (do not hand-edit; regenerate) |
@@ -183,6 +184,7 @@ Hierarchy must **not** use `applyAccepted` (wrong assign order; loses per-fragme
 ## Next steps
 
 - **Terms:** [`docs/glossary.md`](docs/glossary.md)
+- **Origins & sources:** [`docs/origins-and-sources.md`](docs/origins-and-sources.md)
 - **Author a machine or change a boundary:** [`docs/authoring-guide.md`](docs/authoring-guide.md)
 - **Timers / Flash ε / watchdog:** [`docs/timers-and-automatic.md`](docs/timers-and-automatic.md)
 - **Visual structure:** open [`docs/machine-examples-visual.html`](docs/machine-examples-visual.html)

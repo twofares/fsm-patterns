@@ -165,5 +165,6 @@ Full SCXML RTC interpreter, shallow/deep history, deferred-event queues, orthogo
 
 - [README](../README.md)  
 - [glossary.md](glossary.md)  
+- [origins-and-sources.md](origins-and-sources.md) — SCXML/UML motivation vs this sample’s encoding  
 - [authoring-guide.md](authoring-guide.md)  
-- Sources: `flat/TrafficLight.kt`, `gof/ConnectionMachine.kt`, `machine/TimerPort.kt`, `machine/Automatic.kt`  
+- Code: `flat/TrafficLight.kt`, `gof/ConnectionMachine.kt`, `machine/TimerPort.kt`, `machine/Automatic.kt`  

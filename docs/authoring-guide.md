@@ -191,6 +191,7 @@ refuseCrossCutting(
 
 - [README](../README.md) — teaching overview  
 - [glossary.md](glossary.md) — as-built terms  
+- [origins-and-sources.md](origins-and-sources.md) — provenance and concept sources  
 - [timers-and-automatic.md](timers-and-automatic.md) — timers + ε  
 - [machine-examples-visual.html](machine-examples-visual.html) — structural diagrams  
 - [export.md](../export.md) — generated tables  
