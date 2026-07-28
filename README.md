@@ -24,10 +24,24 @@ Unfamiliar words (menu, protocol, ADT, alphabet, offer, …) are defined in
 
 ## Build & run
 
+With [just](https://github.com/casey/just) (preferred):
+
 ```bash
-gradle test
-gradle run          # DemoMain: dual-sink + VirtualClock dwell/watchdog fire
-gradle -q runExport > export.md   # product tables + Mermaid
+just              # list recipes
+just test
+just run          # DemoMain: dual-sink + VirtualClock dwell/watchdog fire
+just export       # product tables + Mermaid → export.md
+just docs         # alias for export
+just visual       # open docs/machine-examples-visual.html
+just ci           # clean + build/test + regenerate export.md
+```
+
+Gradle (equivalent):
+
+```bash
+./gradlew test
+./gradlew run
+./gradlew -q runExport > export.md
 ```
 
 ## Documentation map
