@@ -29,7 +29,7 @@ With [just](https://github.com/casey/just) (preferred):
 ```bash
 just              # list recipes
 just test
-just run          # DemoMain: dual-sink + VirtualClock dwell/watchdog fire
+just run          # DemoMain: dual-sink + VirtualClock dwell/watchdog/track-end fire
 just export       # product tables + Mermaid → export.md
 just docs         # alias for export
 just visual       # open docs/machine-examples-visual.html
@@ -53,32 +53,41 @@ Gradle (equivalent):
 | [`docs/origins-and-sources.md`](docs/origins-and-sources.md) | Why the repo exists; concept lineage (Harel, CSP, GoF, …) and code provenance |
 | [`docs/authoring-guide.md`](docs/authoring-guide.md) | Detailed how-to: add a machine, boundaries, ports, export registration |
 | [`docs/timers-and-automatic.md`](docs/timers-and-automatic.md) | Detailed how-to: `TimerIntent`, `TimerPort`, `automaticStep` / `drainAutomatic` |
+| [`docs/in-process-vs-interproc.md`](docs/in-process-vs-interproc.md) | **In-process vs inter-proc/stateless** boundaries (same pure steps; different ownership) |
 | [`export.md`](export.md) | **Generated** product tables + Mermaid (do not hand-edit; regenerate) |
 | [`docs/machine-examples-visual.html`](docs/machine-examples-visual.html) | Optional structural diagrams (open in a browser) |
 
 ## Package layout
 
-| Path | Role |
-|------|------|
-| `flat/` | TrafficLight — total flat FSM, dwell timers, Flash + ε |
-| `csp/` | FileProtocol — partial machine (accept or refuse; “menu” of legal ops) |
-| `gof/` | Connection — hierarchical session machine + Online watchdog timer |
-| `orthogonal/` | DoorSystem — two concurrent regions (Latch ∥ Swing) + container refuse |
-| `effect/` | Pure outcome types, cross-cutting vocabulary, `TimerIntent` |
-| `machine/` | Boundary apply, hierarchy helpers, timers, automatic drain, recording ports |
-| `export/` | Build Markdown + Mermaid tables from pure steps |
-| `logging/` | Transition audit log (one cross-cutting sink) |
-| `DemoMain.kt` / `ExportMain.kt` | Live demos |
+Two **boundary styles** share pure dual-sink steps. Do not confuse them:
+
+| Path | Style | Role |
+|------|-------|------|
+| `flat/` | **In-process** | TrafficLight — total flat FSM, dwell timers, Flash + ε |
+| `csp/` | **In-process** | FileProtocol — partial machine (accept or refuse; “menu” of legal ops) |
+| `gof/` | **In-process** | Connection — hierarchical session machine + Online watchdog timer |
+| `orthogonal/` | **In-process** | DoorSystem — two concurrent regions (Latch ∥ Swing) + container refuse |
+| `machine/` | **In-process** | Boundary apply, hierarchy helpers, co-located `TimerPort`, automatic drain, recording ports |
+| `interproc/` | **Inter-proc / stateless** | Session store + pure `stepOffer` + remote thin player + boundary-owned `TimerPort` (multi-session = N engagement instances) |
+| `effect/` | Shared pure | Outcome types, cross-cutting vocabulary, `TimerIntent` |
+| `export/` | Shared pure | Build Markdown + Mermaid tables from pure steps |
+| `logging/` | Shared | Transition audit log (one cross-cutting sink) |
+| `DemoMain.kt` / `ExportMain.kt` | Demos | Live demos (in-process + short inter-proc section) |
+
+**In-process:** live `var current`, same-stack `applyAccepted` / `applyOffer` / `applyFragments`, process-local ports and `TimerPort`.  
+**Inter-proc:** load state → pure step → **same** `applyOffer` with store + remote domain bindings; timers on a boundary-owned `TimerPort` re-enter as events. One session per engagement instance.  
+Details and mapping table: [`docs/in-process-vs-interproc.md`](docs/in-process-vs-interproc.md).
 
 ## Machine kinds
 
 | Kind | Sample | Pure surface | Boundary | Export |
 |------|--------|--------------|----------|--------|
-| **Flat (total)** | TrafficLight | `step(S,E) → StepResult` | `applyAccepted` | `productEvaluateTotal` |
-| **CSP / partial** | FileProtocol | `stepOffer → OfferOutcome` | `applyOffer` | `productEvaluateOffer` |
+| **Flat (total)** | TrafficLight | `step(S,E) → StepResult` | `applyAccepted` (**in-process**) | `productEvaluateTotal` |
+| **CSP / partial** | FileProtocol | `stepOffer → OfferOutcome` | `applyOffer` (**in-process**) | `productEvaluateOffer` |
+| **Partial + inter-proc** | PlayerControl | `stepOffer → OfferOutcome` | `StatelessPlayerEngagement` + `applyOffer` (store + remote) | Boundary vignette (no product table) |
 | **Hierarchical** | Connection | `connectionStep → HierarchyStep` | `applyFragments` then assign | `productEvaluateHierarchy` |
 | **Orthogonal** | DoorSystem | Region `step` + container guards | Region: `applyAccepted`; guard: `applyRefusal` | Compose region tables |
-| **Timers** | Light dwell; Online watchdog | Domain wraps `TimerIntent` Arm/Cancel | Multi-port `applyDomain*` + `TimerPort` | Timer labels (no clocks) |
+| **Timers** | Light dwell; Online watchdog; player track-end | Domain wraps `TimerIntent` Arm/Cancel | `TimerPort` (live field or boundary-owned; multi-session = N engagement instances) | Timer labels (no clocks) |
 | **Automatic (ε)** | Flash → Red | `automaticStep(S) → StepResult?` | `drainAutomatic` after external apply | `productEvaluateAutomatic` |
 
 ### Total vs partial (the main fork)
@@ -177,11 +186,13 @@ Pure steps only **declare**. Boundaries **apply** via shared helpers. Export rea
 
 | Family | Helpers | Order | Used by |
 |--------|---------|-------|---------|
-| Assign-then-apply | `applyAccepted`, `applyOffer` | Assign → CC → domain | Flat, CSP, orthogonal regions |
-| Refuse-only (CC) | `applyRefusal` | CC only | Orthogonal container guards |
-| Apply-then-assign | `applyFragments` | Per-fragment CC→domain, **then** assign leaf | Hierarchical Connection |
+| Assign-then-apply | `applyAccepted`, `applyOffer` | Assign → CC → domain | Flat, CSP, orthogonal regions (**in-process**); inter-proc Player via `applyOffer` with store/remote bindings |
+| Refuse-only (CC) | `applyRefusal` | CC only | Orthogonal container guards (**in-process**) |
+| Apply-then-assign | `applyFragments` | Per-fragment CC→domain, **then** assign leaf | Hierarchical Connection (**in-process**) |
 
 Hierarchy must **not** use `applyAccepted` (wrong assign order; loses per-fragment pairing such as Online enter + `OpenSession`).
+
+Inter-proc **does** call `applyOffer`: assign closes over external persist; domain closes over remote deliver + boundary-owned timers. Teaching contrast is the **bindings**, not a forked helper. Same pure `OfferOutcome` refuse hygiene (no domain on refuse).
 
 ## Must / must not
 
@@ -201,5 +212,6 @@ Hierarchy must **not** use `applyAccepted` (wrong assign order; loses per-fragme
 - **Origins & sources:** [`docs/origins-and-sources.md`](docs/origins-and-sources.md)
 - **Author a machine or change a boundary:** [`docs/authoring-guide.md`](docs/authoring-guide.md)
 - **Timers / Flash ε / watchdog:** [`docs/timers-and-automatic.md`](docs/timers-and-automatic.md)
+- **In-process vs inter-proc / stateless:** [`docs/in-process-vs-interproc.md`](docs/in-process-vs-interproc.md)
 - **Visual structure:** open [`docs/machine-examples-visual.html`](docs/machine-examples-visual.html)
 - **Product tables:** regenerate `export.md` as above; inspect effects column for dual-sink labels

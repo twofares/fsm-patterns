@@ -13,6 +13,9 @@ import fsm.sample.machine.drainAutomatic
 /**
  * PURPOSE: Flat FSM — pure step declares **multiple cross-cutting families** + domain.
  *
+ * **In-process boundary family:** live [TrafficLight] context + [applyAccepted]
+ * (contrast `interproc/` load-store-deliver — `docs/in-process-vs-interproc.md`).
+ *
  * Cross-cutting (shared [CrossCuttingEnv]):
  * - Audit.LogTransition — mode change log
  * - Metric.Inc("fsm.transitions") — process-wide transition counter

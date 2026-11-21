@@ -101,7 +101,7 @@ class BoundaryApplyTest {
     // -------------------------------------------------------------------------
 
     @Test
-    fun `applyOffer Accepted assigns CC and domain`() {
+    fun `applyOffer Accepted assigns then CC then domain`() {
         val env = CrossCuttingEnv()
         val port = LightPort()
         var current: LightState = LightState.Red
@@ -121,8 +121,10 @@ class BoundaryApplyTest {
             env = env,
             port = port,
             applyDomain = { domain, p ->
-                order += "domain"
+                // CC must already have updated metrics before domain runs.
+                order += if (env.metrics.get("csp.accept") == 1) "cc-before-domain" else "cc-missing"
                 applyDomainLight(domain, p, TimerPort())
+                order += "domain-done"
             },
             assign = {
                 order += "assign"
@@ -130,10 +132,11 @@ class BoundaryApplyTest {
             },
         )
 
-        assertEquals(listOf("assign", "domain"), order)
+        assertEquals(listOf("assign", "cc-before-domain", "domain-done"), order)
         assertEquals(LightState.Green, current)
         assertEquals(listOf("Green"), port.commands)
         assertEquals(1, env.metrics.get("csp.accept"))
+        assertEquals(1, env.log.snapshot().filter { it.kind == RecordKind.TRANSITION }.size)
     }
 
     @Test

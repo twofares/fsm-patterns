@@ -39,6 +39,10 @@ or channel library.
 **engagement**  
 Whether the machine **takes** an event (accept) or **declines** it (refuse /
 unhandled). Total machines always engage; partial machines may refuse.
+Inter-proc docs also use **engagement instance** for one
+[`StatelessPlayerEngagement`](#statelessplayerengagement) object (one session
+boundary). “N engagement instances” means N such boundaries, not N accept/refuse
+acts.
 
 **FSM (finite-state machine)**  
 A program that is always in one of a finite set of **states**, and changes
@@ -112,8 +116,11 @@ cross-cutting then domain, **then** write the leaf state if it changed. Used by
 Connection.
 
 **applyOffer**  
-Boundary helper for refuse-capable machines: like accept when the outcome is
-`Accepted`; on `Refused`, run cross-cutting only (no domain I/O).
+Boundary helper for refuse-capable machines: assign next, run cross-cutting;
+on `Accepted` also run domain; on `Refused`, no domain I/O. Used by in-process
+FileProtocol **and** inter-proc [StatelessPlayerEngagement](#statelessplayerengagement)
+(bindings differ — live field vs store / remote). See
+[load-store-deliver](#load-store-deliver--inter-proc-engagement).
 
 **applyRefusal**  
 Boundary helper that runs cross-cutting only—no domain, no state assign. Used
@@ -121,8 +128,9 @@ for orthogonal **container** guards (e.g. “cannot open while locked”).
 
 **Arm / Cancel**  
 Cases of [`TimerIntent`](#timerintent). The pure step **declares** them inside
-the domain list; [`TimerPort`](#timerport) **schedules** them. Cancel before
-CloseSession (and similar) is intentional under inline multi-port apply.
+the domain list; a [`TimerPort`](#timerport) (live field or boundary-owned)
+**schedules** them. Cancel before CloseSession (and similar) is intentional under
+inline multi-port apply.
 
 **assign**  
 Writing the machine’s current state field after (or around) effect application.
@@ -152,7 +160,8 @@ an accept or refuse path (e.g. `acceptTransitionCrossCutting`,
 **Clock / VirtualClock**  
 Source of “now” for timers. Tests and demos **advance** a virtual clock instead
 of sleeping. Pure steps never read clocks. Inject only the clock; construct
-`TimerPort(clock)` on the boundary object so the port and clock cannot desync.
+`TimerPort(clock)` on the boundary (live field or engagement-owned) so the
+schedule host and clock cannot desync.
 
 **connectionStep**  
 Connection’s pure hierarchical function: dispatch the event, attach planned
@@ -229,9 +238,16 @@ leaf, enter parent, enter leaf, handler…). Each fragment holds its own
 cross-cutting + domain pair so enter Online can open a session in the same
 package as its audit line.
 
+**DueFireResult**  
+Inter-proc: one due-timer re-engage outcome (`event` + `EngagementResult`).
+`pollDue` already removed the timer from the bag; “fired” means **re-engaged**,
+not “accepted.” `result.accepted` may be false if state and schedule desynced.
+
 **fireDueTimeouts**  
-Demo/test recipe: ask the timer port what is due, map each `eventKey` to an
-event, call `handle`. Not used inside export.
+Demo/test recipe: ask the timer host what is due, map each `eventKey` to an
+event, re-enter the normal accept/refuse path. In-process: live `handle`. Inter-proc:
+`StatelessPlayerEngagement.fireDueTimeouts` → `engage` on the **same** instance;
+returns [`DueFireResult`](#duefireresult) per due entry. Not used inside export.
 
 **flat (total)**  
 A single-level machine where **every** sealed event is accepted in every state
@@ -288,9 +304,15 @@ A **container** may still refuse combinations that are illegal as a whole
 Pure hierarchy planner: compute paths, LCA, and the ordered exit/enter
 fragments for a leaf change.
 
+**PlayerControl**  
+Inter-proc teaching machine (partial): Idle/Playing/Paused with thin-player
+domain commands. Pure `stepOffer`; boundary is
+[`StatelessPlayerEngagement`](#statelessplayerengagement) calling `applyOffer`
+with store + remote bindings.
+
 **pollDue**  
 On `TimerPort`: return timers whose deadline has passed, remove them from the
-pending set, **do not** call `handle` yourself.
+pending set, **do not** call `handle`/`engage` yourself.
 
 **port**  
 Boundary object that **performs** domain intents (records ops, increments
@@ -310,7 +332,19 @@ Subclass it; do not wrap a private list that only re-exports the same API.
 **refuse**  
 Decline an event: may still emit audit/metric/trace, but must **not** perform
 domain I/O. Types: `OfferOutcome.Refused`, hierarchy `Unhandled`, or
-`applyRefusal` for container guards.
+`applyRefusal` for container guards. Inter-proc: refuse delivers no thin-player
+commands.
+
+**SessionStore**  
+Inter-proc stand-in for external session persistence: `load` / `store` pure
+state `S` (one holder per engagement in the sample). Replaces live
+`var current`.
+
+**StatelessPlayerEngagement**  
+Inter-proc engagement boundary (**one session per instance**): load → pure
+`stepOffer` → `applyOffer` (assign = `store`, domain = thin player + timers).
+`sessionId` is instance identity only; isolation = don’t share store/player/timers.
+See [load-store-deliver](#load-store-deliver--inter-proc-engagement).
 
 **StepResult**  
 Pure result for total machines: successor state + cross-cutting list + domain
@@ -322,17 +356,20 @@ list. Always “accepted” by type—there is no refuse case.
 
 **TimerIntent**  
 Pure scheduling request: `Arm(id, delayMs, eventKey)` or `Cancel(id)`. Stored
-in the **domain** list (with other machine I/O), not under cross-cutting. The
-port turns Arm into a future event injection.
+in the **domain** list (with other machine I/O), not under cross-cutting.
+Applied by [`TimerPort`](#timerport) (live field or boundary-owned).
 
 **TimerPort**  
-Boundary schedule: owns pending timers, uses an injected clock, applies
-Arm/Cancel, later yields due work via `pollDue`.
+Boundary schedule bag: owns pending timers, uses an injected clock, applies
+Arm/Cancel, later yields due work via `pollDue`. Used co-located on live machines
+**and** owned by inter-proc engagement instances (one bag per instance; multi-session =
+N instances).
 
 **vignette**  
 One teaching example machine and its package (`flat/`, `csp/`, `gof/`,
-`orthogonal/`) with its own states, events, domain types, and ports. Shared
-machinery lives in `effect/`, `machine/`, and `export/`.
+`orthogonal/` in-process; `interproc/` for load-store-deliver) with its own
+states, events, domain types, and ports. Shared pure machinery lives in
+`effect/`, `machine/`, and `export/`.
 
 **watchdog**  
 A timer that means “if nothing healthy happens in time, fail.” Connection arms
@@ -341,18 +378,28 @@ reset that deadline in this sample (absolute deadline from Online enter).
 
 ---
 
+### load-store-deliver / inter-proc engagement
+
+Boundary style for **stateless** hosts: load pure `S` → pure step →
+[`applyOffer`](#applyoffer) with assign = persist and domain = remote thin player
++ boundary-owned timers. **One session per engagement instance**; multi-session
+demos use multiple instances. Sample: `interproc/StatelessPlayerEngagement`.
+Full contrast: [in-process-vs-interproc.md](in-process-vs-interproc.md).
+
 ## Outcome shapes (quick map)
 
 | Kind | Pure type | Boundary | Engagement in plain language |
 |------|-----------|----------|------------------------------|
-| Total flat | `StepResult` | `applyAccepted` | Every known event is always handled |
-| Partial / CSP | `OfferOutcome` | `applyOffer` | Event may be on the menu or refused |
+| Total flat | `StepResult` | `applyAccepted` (in-process) | Every known event is always handled |
+| Partial / CSP | `OfferOutcome` | `applyOffer` (in-process) | Event may be on the menu or refused |
+| Partial / inter-proc | `OfferOutcome` | `applyOffer` (store + remote bindings) | Same helper; remote deliver + external store |
 | Hierarchical | `HierarchyStep` | `applyFragments` then assign | Handled or unhandled, with parent exit/enter |
 | Orthogonal region | `StepResult` | `applyAccepted` | Usually total inside each region |
 | Orthogonal guard | refuse CC list | `applyRefusal` | Whole system says “no” without domain I/O |
 | Timers / ε | same as host kind | multi-port / drain after external apply | When steps run, not a separate accept/refuse kind |
 
-Full prose comparison: [README — Total vs partial](../README.md#total-vs-partial-the-main-fork).
+Full prose comparison: [README — Total vs partial](../README.md#total-vs-partial-the-main-fork).  
+In-process vs inter-proc: [in-process-vs-interproc.md](in-process-vs-interproc.md).
 
 ---
 
@@ -362,5 +409,7 @@ Full prose comparison: [README — Total vs partial](../README.md#total-vs-parti
 - [origins-and-sources.md](origins-and-sources.md) — project provenance and concept sources  
 - [authoring-guide.md](authoring-guide.md) — checklist and recipes  
 - [timers-and-automatic.md](timers-and-automatic.md) — dwell, watchdog, Flash ε  
+- [in-process-vs-interproc.md](in-process-vs-interproc.md) — in-process vs stateless boundaries  
 - [machine-examples-visual.html](machine-examples-visual.html) — structural diagrams  
 - [export.md](../export.md) — generated product tables  
+

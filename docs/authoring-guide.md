@@ -3,6 +3,11 @@
 Detailed how-to for extending this sample. High-level orientation lives in the
 [README](../README.md). Term definitions: [glossary.md](glossary.md).
 Timers and automatic transitions: [timers-and-automatic.md](timers-and-automatic.md).
+In-process vs inter-proc boundaries: [in-process-vs-interproc.md](in-process-vs-interproc.md).
+
+**Default in this guide:** in-process live contexts + `machine/apply*`. For
+stateless load→step→store→remote-deliver, see the inter-proc section below and
+package `interproc/`.
 
 ## Shared surfaces (as-built)
 
@@ -13,10 +18,11 @@ Timers and automatic transitions: [timers-and-automatic.md](timers-and-automatic
 | Pure hierarchy fuse | `effect/HierarchyStep` + vignette `connectionStep` |
 | CC families + env | `effect/CrossCuttingEffect`, `CrossCuttingEnv`, `CrossCuttingInterpreter` |
 | Accept / refuse list builders | `effect/acceptTransitionCrossCutting`, `refuseCrossCutting` |
-| Boundary apply | `machine/applyAccepted`, `applyOffer`, `applyRefusal`, `applyFragments` |
+| Boundary apply | `machine/applyAccepted`, `applyOffer`, `applyRefusal`, `applyFragments` (in-process **and** inter-proc bindings) |
 | Hierarchy structure | `machine/pathFromRoot`, `commonPrefixLength`, `planTransition`, `dispatchWithDelegation` |
 | Fragments | `machine/EffectFragment`, `FragmentedStepEffects` |
 | List recording bag | `machine/RecordingPort` — **subclass** for vignette ports |
+| Inter-proc engagement | `interproc/StatelessPlayerEngagement`, `SessionStore`, `ThinPlayerPort` |
 | Product export | `export/productEvaluateTotal` / `Offer` / `Hierarchy` / `Automatic`; `SampleExports.exportAllDocument` |
 | Dual-sink test helpers | `src/test/.../testsupport/` |
 
@@ -29,13 +35,18 @@ Call hierarchy helpers from `machine/` **directly**. Do not re-export thin publi
 1. Sealed **state** + **event** with `label()`.
 2. Machine-local **domain type** (if any I/O): a sealed class/interface of intents
    with `exportLabel()` — never nest `CrossCuttingEffect` inside it.
-3. Domain **port** + `applyDomainX` — only place that performs those intents
-   (hardware, files, sessions, …).
+3. Domain **port** / deliver path + `applyDomainX` — only place that performs those
+   intents (hardware, files, sessions, remote thin player, …).
 4. **Pure** step surface matching kind (below). Pure code must not touch env / port / log / clocks.
-5. **Boundary** only via the kind-correct shared `apply*` helper.
+5. **Boundary:**
+   - **In-process:** kind-correct shared `applyAccepted` / `applyOffer` /
+     `applyRefusal` / `applyFragments` only.
+   - **Inter-proc / stateless:** same helpers with different bindings — load →
+     pure step → `applyOffer` (assign = store, domain = remote + timers). See
+     [Inter-proc](#inter-proc--stateless-copy-playercontrol).
 6. Cross-cutting via `acceptTransitionCrossCutting` / `refuseCrossCutting` **with machine-specific extras** / `traceDetail`.
-7. **Export:** explicit state/event lists + product helper + optional Mermaid; never construct side-effecting context classes for export (`ConnectionContext` runs entry on `init`).
-8. **Tests:** pure-API vs export row parity; refuse has no domain; handle mutates env/port; purity of step.
+7. **Export:** explicit state/event lists + product helper + optional Mermaid; never construct side-effecting context classes for export (`ConnectionContext` runs entry on `init`). Optional for boundary-only inter-proc vignettes.
+8. **Tests:** pure-API vs export row parity (when exported); refuse has no domain; handle/engage mutates env/port; purity of step.
 
 ---
 
@@ -111,6 +122,41 @@ Conn-local only: `HandleResult`, `declaredEffects`, `onEvent`, Heartbeat / same-
 2. Container pure guards: `refuseCrossCutting` then **`applyRefusal`** (CC only; no domain, no assign).
 3. Share one `CrossCuttingEnv` + domain port across regions when teaching process-wide CC.
 4. Export: compose region tables (`exportDoorSystem`); not a full product of concurrent configurations.
+
+---
+
+## Inter-proc / stateless (copy PlayerControl)
+
+**Engagement instance:** no live `var current`. **One session per instance**
+(`StatelessPlayerEngagement`). Each request loads pure state, runs pure
+`stepOffer`, then **`applyOffer`** with assign = persist and domain = thin remote
+player (Play/Pause/Unpause/Next) + boundary-owned `TimerPort`. Teaching analogy
+for “server brain + device” — not a real network stack. Multi-session demos
+construct **N engagement instances** (each owns store, player, timers, CC;
+optionally share a `VirtualClock`). Full contrast:
+[in-process-vs-interproc.md](in-process-vs-interproc.md).
+
+**Files:** `interproc/PlayerControl.kt`, `PlayerDomain.kt`, `SessionStore.kt`,
+`StatelessPlayerEngagement.kt`.
+
+1. Pure partial machine: `stepOffer(S, E) → OfferOutcome` (same dual-sink rules as FileProtocol).
+2. Domain: sealed intents that **map to remote commands** + `TimerIntent` (not co-located lamp/file ports).
+3. Boundary: **do** call `applyOffer` — same helper as FileProtocol; different closures:
+   - `store.load` → pure step
+   - `assign = { store.store(it) }`
+   - `applyDomain` closes over thin player + `TimerPort` (`applyDomainPlayerRemote`)
+   - refuse hygiene is free (no domain on `Refused`)
+4. Timers: Arm/Cancel → boundary-owned `TimerPort`; due → `pollDue` → map `eventKey` → sealed event → **`engage` on the same instance** (not same-stack live `handle`).
+5. Tests: pure `stepOffer`/menu in `PlayerControlTest`; load/store/deliver/due/multi-instance in `StatelessPlayerEngagementTest`.
+6. Export: optional; this vignette is boundary-focused (no product table required).
+
+```text
+load S → pure stepOffer → applyOffer(assign=store, domain=remote+timers)
+```
+
+Reuse existing pure steps the same way (`FileProtocol.stepOffer`, `TrafficLight.step`)
+if you only need the boundary pattern; the music-player machine exists so the
+thin-player command set is obvious.
 
 ---
 
@@ -193,5 +239,7 @@ refuseCrossCutting(
 - [glossary.md](glossary.md) — as-built terms  
 - [origins-and-sources.md](origins-and-sources.md) — provenance and concept sources  
 - [timers-and-automatic.md](timers-and-automatic.md) — timers + ε  
+- [in-process-vs-interproc.md](in-process-vs-interproc.md) — in-process vs stateless boundaries  
 - [machine-examples-visual.html](machine-examples-visual.html) — structural diagrams  
 - [export.md](../export.md) — generated tables  
+

@@ -20,6 +20,9 @@ import fsm.sample.machine.planTransition
 /**
  * PURPOSE: GoF State pattern + hierarchical superstate delegation + entry/exit.
  *
+ * **In-process boundary family:** live [ConnectionContext] + [applyFragments]
+ * (contrast `interproc/` load-store-deliver — `docs/in-process-vs-interproc.md`).
+ *
  * Disciplines demonstrated (ordinary OO, no statechart engine):
  * 1. GoF State: context holds current state object; transitions replace it.
  * 2. Hierarchical FSMs: composite/leaf states; unhandled events bubble to parent

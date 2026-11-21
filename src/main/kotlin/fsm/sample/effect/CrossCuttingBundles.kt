@@ -17,8 +17,9 @@ package fsm.sample.effect
  * migrating call sites.
  *
  * Boundary apply of these lists: [fsm.sample.machine.applyAccepted] /
- * [fsm.sample.machine.applyOffer] / [fsm.sample.machine.applyFragments].
- * How to add a machine: project README.
+ * [fsm.sample.machine.applyOffer] / [fsm.sample.machine.applyFragments]
+ * (same helpers for in-process and inter-proc; bindings differ — see `interproc/`
+ * and `docs/in-process-vs-interproc.md`). How to add a machine: project README.
  */
 
 /**

@@ -12,6 +12,9 @@ import fsm.sample.machine.applyRefusal
 /**
  * PURPOSE: Orthogonal door — multi-family cross-cutting + domain actuators.
  *
+ * **In-process boundary family:** live [DoorSystem] + region [applyAccepted] /
+ * container [applyRefusal] (contrast `interproc/` — `docs/in-process-vs-interproc.md`).
+ *
  * Cross-cutting ([CrossCuttingEnv] shared by regions + container):
  * - Audit transitions / refusals
  * - Metrics (fsm.transitions, door.refuse, door.latch.*, door.swing.open)

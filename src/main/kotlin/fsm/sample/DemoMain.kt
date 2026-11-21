@@ -14,6 +14,9 @@ import fsm.sample.flat.step
 import fsm.sample.gof.CONNECTION_WATCHDOG_MS
 import fsm.sample.gof.ConnEvent
 import fsm.sample.gof.ConnectionContext
+import fsm.sample.interproc.PlayerEvent
+import fsm.sample.interproc.StatelessPlayerEngagement
+import fsm.sample.interproc.TRACK_DURATION_MS
 import fsm.sample.orthogonal.DoorEvent
 import fsm.sample.orthogonal.DoorSystem
 
@@ -26,6 +29,10 @@ import fsm.sample.orthogonal.DoorSystem
  * - Trace → TracePort
  *
  * Domain stays on machine ports (lamp, file ops, session, door actuators).
+ *
+ * In-process vignettes use live contexts + [fsm.sample.machine] apply helpers.
+ * A short **inter-proc** section shows load→step→store→thin-player deliver
+ * (`interproc/`); see `docs/in-process-vs-interproc.md`.
  */
 fun main() {
     fun line(s: String = "") {
@@ -102,5 +109,41 @@ fun main() {
     line("DOMAIN port: ${file.port.snapshot()}")
     line()
 
-    line("=== Demo complete: multi-family cross-cutting + domain ports ===")
+    line("--- Inter-proc PlayerControl: load→step→applyOffer(store→CC→domain) + timer ---")
+    val player = StatelessPlayerEngagement(sessionId = "demo-session")
+    player.engage(PlayerEvent.Play)
+    line("after Play: state=${player.state()?.label()} pending=${player.timers.pending()}")
+    line("thin player: ${player.player.snapshot()}")
+    // Separate engagement instance so refuse demo does not share store/port with Play path above
+    val refuseOnly = StatelessPlayerEngagement(sessionId = "r")
+    val refuseResult = refuseOnly.engage(PlayerEvent.Pause)
+    line(
+        "refuse Pause@Idle: accepted=${refuseResult.accepted} delivered=${refuseResult.delivered} " +
+            "reason=${refuseResult.reason} state=${refuseOnly.state()?.label()} " +
+            "storePresent=${refuseOnly.store.isPresent()}",
+    )
+    // Multi-session = N engagement instances (independent store / player / timers / CC)
+    val sessA = StatelessPlayerEngagement(sessionId = "a")
+    val sessB = StatelessPlayerEngagement(sessionId = "b")
+    sessA.engage(PlayerEvent.Play)
+    sessB.engage(PlayerEvent.Play)
+    sessA.engage(PlayerEvent.Pause)
+    line(
+        "multi-session instances: a=${sessA.state()?.label()} pendingA=${sessA.timers.pending().size} " +
+            "b=${sessB.state()?.label()} pendingB=${sessB.timers.pending().size}",
+    )
+    player.clock.advance(TRACK_DURATION_MS)
+    val trackFired = player.fireDueTimeouts()
+    line(
+        "after track-end fireDue: events=${trackFired.map { it.event }} " +
+            "accepted=${trackFired.map { it.result.accepted }} " +
+            "state=${player.state()?.label()} player=${player.player.snapshot()}",
+    )
+    line("CROSS-CUTTING audit log:")
+    line(player.crossCutting.log.formatAll())
+    line("CROSS-CUTTING ${player.crossCutting.snapshot()}")
+    line("DOMAIN thin player: ${player.player.snapshot()}")
+    line()
+
+    line("=== Demo complete: multi-family cross-cutting + domain ports (+ inter-proc) ===")
 }

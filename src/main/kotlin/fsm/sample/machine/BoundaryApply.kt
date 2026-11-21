@@ -7,16 +7,22 @@ import fsm.sample.effect.OfferOutcome
 import fsm.sample.effect.StepResult
 
 /**
- * PURPOSE: Shared dual-sink boundary apply helpers for total, offer, and hierarchical machines.
+ * PURPOSE: Shared dual-sink boundary apply helpers for total, offer, and
+ * hierarchical machines — **in-process and inter-proc**.
  *
  * Pure steps only declare outcomes; boundaries call these helpers so assign +
  * [CrossCuttingInterpreter] + domain apply stay consistent and refuse cannot
  * apply domain by accident.
  *
- * Multi-port machines (TrafficLight, Connection) pass a domain lambda that
- * closes over machine fields (`port` + `timers`); the `P` argument is the
- * primary domain port for single-port machines and may be unused when fan-out
- * needs more than one port.
+ * Multi-port machines (TrafficLight, Connection, inter-proc Player) pass a domain
+ * lambda that closes over the ports they own (`port` + `timers`, or thin player +
+ * boundary timers); the `P` argument is the primary domain port for single-port
+ * machines and may be unused (`Unit`) when fan-out needs more than one port.
+ *
+ * **Inter-proc uses the same helpers with different bindings:** assign closes over
+ * external [fsm.sample.interproc.SessionStore] persist; applyDomain closes over
+ * remote deliver + boundary-owned [TimerPort]. See `docs/in-process-vs-interproc.md`.
+ * Do not hand-roll a second assign→CC→domain ladder at the engagement boundary.
  *
  * ## Two ordering contracts (critical)
  *

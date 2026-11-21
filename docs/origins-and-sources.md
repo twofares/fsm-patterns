@@ -69,6 +69,9 @@ Evolution is in git; this is the story, not a commit list:
 6. **Documentation refresh** — replace process-heavy design notes with a
    teaching README, authoring guide, timers how-to, glossary, and this origins
    doc; keep optional visual HTML.
+7. **Inter-proc / stateless boundary** — `interproc/` load→step→store→remote
+   deliver (`StatelessPlayerEngagement`); multi-session = N engagement instances.
+   Contrast: [in-process-vs-interproc.md](in-process-vs-interproc.md).
 
 Development has used ordinary git commits plus iterative design/implement/review
 loops (including agent-assisted work). The **as-built** guides are the contract;

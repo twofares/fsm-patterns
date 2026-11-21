@@ -2,7 +2,8 @@ package fsm.sample.effect
 
 /**
  * PURPOSE: Pure delayed-send intents — domain-like scheduling, not cross-cutting observability.
- * Pure steps declare; boundaries apply via [fsm.sample.machine.TimerPort].
+ * Pure steps declare; boundaries apply via [fsm.sample.machine.TimerPort]
+ * (co-located on a live machine **or** boundary-owned for inter-proc).
  * Export labels only — never constructs clocks.
  *
  * [Arm.eventKey] MUST equal the vignette sealed event's [label] (see eventKey recipe).

@@ -11,6 +11,9 @@ import fsm.sample.machine.applyOffer
 /**
  * PURPOSE: CSP process with multi-family **cross-cutting** + domain I/O intents.
  *
+ * **In-process boundary family:** live [FileProtocol] context + [applyOffer]
+ * (contrast `interproc/` load-store-deliver — `docs/in-process-vs-interproc.md`).
+ *
  * Cross-cutting (shared [CrossCuttingEnv]):
  * - Audit.LogTransition / LogRefusal
  * - Metric.Inc("csp.accept" | "csp.refuse")

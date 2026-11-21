@@ -3,10 +3,16 @@
 How to use delayed events and eventless completion in this sample.  
 Overview: [README](../README.md). Terms: [glossary.md](glossary.md).
 General authoring: [authoring-guide.md](authoring-guide.md).
+Inter-proc external timers: [in-process-vs-interproc.md](in-process-vs-interproc.md).
 
 Timers and automatic transitions **extend** dual-sink pure steps. They do **not**
 add a third list on `StepResult` / `OfferOutcome` / `HierarchyStep`, and they are
 **not** a full SCXML interpreter.
+
+This doc covers **in-process** `TimerPort` + live `fireDueTimeouts`. Inter-proc
+engagement instances also use boundary-owned `TimerPort` + `VirtualClock` (parity).
+Multi-session = N engagement instances (each with its own bag; optionally share a
+`VirtualClock`) — see package `interproc/` and the inter-proc doc.
 
 ---
 

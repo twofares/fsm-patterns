@@ -38,7 +38,7 @@ test-q:
 clean:
     {{gradle}} clean
 
-# DemoMain: dual-sink + VirtualClock dwell/watchdog
+# DemoMain: dual-sink + VirtualClock dwell/watchdog/track-end
 run:
     {{gradle}} run
 

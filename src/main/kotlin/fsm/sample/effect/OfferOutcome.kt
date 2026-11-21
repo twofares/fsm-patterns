@@ -6,9 +6,12 @@ package fsm.sample.effect
  * Dual-sink on **Accepted** (crossCutting + domain); **Refused** has no domain field so
  * I/O intents are unrepresentable on refuse paths.
  *
- * Pure steps only declare; boundaries call [fsm.sample.machine.applyOffer].
- * Export labels = cross-cutting labels (+ domain labels when Accepted).
- * Prefer this over [StepResult] for refuse-capable machines (README kind matrix).
+ * Pure steps only declare. Boundaries call [fsm.sample.machine.applyOffer]
+ * (in-process live assign **or** inter-proc store + remote domain bindings —
+ * [fsm.sample.interproc.StatelessPlayerEngagement]). Same refuse-without-domain
+ * hygiene either way. Export labels = cross-cutting labels (+ domain labels when
+ * Accepted). Prefer this over [StepResult] for refuse-capable machines
+ * (README kind matrix).
  */
 sealed class OfferOutcome<S, D> {
     abstract val next: S
