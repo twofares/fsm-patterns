@@ -88,17 +88,20 @@ fun menu(state: PlayerState): Set<PlayerEvent> = when (state) {
 fun pureWhenAccepted(state: PlayerState, event: PlayerEvent): PlayerState = when (state) {
     PlayerState.Idle -> when (event) {
         PlayerEvent.Play -> PlayerState.Playing
-        else -> error("pureWhenAccepted outside menu: $state + $event")
+        PlayerEvent.Pause, PlayerEvent.Resume, PlayerEvent.Skip, PlayerEvent.TrackEnded ->
+            error("pureWhenAccepted outside menu: $state + $event")
     }
     PlayerState.Playing -> when (event) {
         PlayerEvent.Pause -> PlayerState.Paused
         PlayerEvent.Skip, PlayerEvent.TrackEnded -> PlayerState.Playing
-        else -> error("pureWhenAccepted outside menu: $state + $event")
+        PlayerEvent.Play, PlayerEvent.Resume ->
+            error("pureWhenAccepted outside menu: $state + $event")
     }
     PlayerState.Paused -> when (event) {
         PlayerEvent.Resume -> PlayerState.Playing
         PlayerEvent.Skip -> PlayerState.Playing
-        else -> error("pureWhenAccepted outside menu: $state + $event")
+        PlayerEvent.Play, PlayerEvent.Pause, PlayerEvent.TrackEnded ->
+            error("pureWhenAccepted outside menu: $state + $event")
     }
 }
 

@@ -149,7 +149,8 @@ data object Offline : ConnState() {
 
     override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
         ConnEvent.Connect -> HandleResult.Handled(Idle)
-        else -> HandleResult.Unhandled
+        ConnEvent.Disconnect, ConnEvent.StartTransfer, ConnEvent.FinishTransfer, ConnEvent.Heartbeat, ConnEvent.WatchdogTimeout ->
+            HandleResult.Unhandled
     }
 }
 
@@ -213,7 +214,7 @@ data object Online : ConnState() {
             // Absolute watchdog: do NOT re-arm here.
             HandleResult.Handled(currentLeaf, listOf(ConnectionEffect.IncHeartbeat))
         }
-        else -> HandleResult.Unhandled
+        ConnEvent.Connect, ConnEvent.StartTransfer, ConnEvent.FinishTransfer -> HandleResult.Unhandled
     }
 }
 
@@ -224,7 +225,11 @@ data object Idle : ConnState() {
 
     override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
         ConnEvent.StartTransfer -> HandleResult.Handled(Transferring)
-        else -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.Connect -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.Disconnect -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.FinishTransfer -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.Heartbeat -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.WatchdogTimeout -> HandleResult.Unhandled // bubbles to Online
     }
 }
 
@@ -235,7 +240,11 @@ data object Transferring : ConnState() {
 
     override fun onEvent(event: ConnEvent, currentLeaf: ConnState): HandleResult = when (event) {
         ConnEvent.FinishTransfer -> HandleResult.Handled(Idle)
-        else -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.Connect -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.Disconnect -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.StartTransfer -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.Heartbeat -> HandleResult.Unhandled // bubbles to Online
+        ConnEvent.WatchdogTimeout -> HandleResult.Unhandled // bubbles to Online
     }
 }
 
